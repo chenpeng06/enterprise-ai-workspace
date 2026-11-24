@@ -60,8 +60,13 @@ powershell.exe -ExecutionPolicy Bypass -File scripts\dev\status.ps1
 
 ## 3. Git 身份（非敏感）
 
-当前目录还不是 Git 仓库，且尚未配置全局身份。可以自己执行，或把
-`user.name` / `user.email` 告诉我：
+仓库已初始化（分支 `main`），当前 remote 为：
+
+```
+origin  git@github.com:chenpeng06/enterprise-ai-workspace.git
+```
+
+全局提交身份已配置（`user.name` / `user.email`）。如果还没有设置，可执行：
 
 ```powershell
 git config --global user.name "你的名字"
@@ -100,12 +105,13 @@ Git for Windows 后再启用 GCM。
 
 ## 5. 需要我操作 Git 时
 
-在本地完成身份与认证后，告诉我：
+当前仓库已完成初始化、首个提交与推送，`main` 跟踪 `origin/main`。后续如需我
+提交或推送，请先确认：
 
 - 平台（GitHub/Gitee/GitLab）；
 - 仓库 URL（可公开）；
 - "SSH/GCM 已配置"；
-- 是否要我执行 `git init`、首次提交或推送。
+- 是否要我执行新提交或推送。
 
 我可以在不接触密钥的前提下执行 `git status`、`git add/commit`、`git push`；
 若 SSH Key 有 passphrase 或凭据需要交互，推送可能仍需你在本机确认。
