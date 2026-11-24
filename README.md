@@ -3,8 +3,9 @@
 面向企业研发运维场景的全栈 AI 项目：知识库问答、原文角标溯源、检索过程透视、
 数字员工多智能体工作流，以及网关限流/TTFT/Token 监控。
 
-> 当前进度：**Phase 1 已完成** —— 四端脚手架、跨语言 JSON Schema 契约、
-> PostgreSQL + pgvector 完整建模。Phase 2 起实现 RAG、LangGraph、限流与前端交互。
+> 当前进度：**Phase 1 + Phase 2 已完成** —— 四端脚手架、跨语言契约、
+> pgvector 建模，以及混合检索（向量 + BM25 + RRF + Rerank）与 LangGraph
+> 数字员工。Phase 3 开始实现 Go 限流、SSE 代理与前端交互。
 
 ## 架构一览
 
@@ -122,6 +123,27 @@ npm run dev
 前端通过 Vite 代理访问网关；`/readyz` 会聚合 PostgreSQL、Redis 与 AI 引擎状态，
 并校验契约版本。
 
+## Phase 2 验证与演示
+
+```powershell
+cd ai-engine-py
+
+# 1) 最小请求验证 DeepSeek / 百炼 Embedding（不打印 Key）
+.\.venv\Scripts\python.exe scripts\check_models.py
+
+# 2) 写入演示知识库（真实 1024 维 Embedding，可重复执行）
+.\.venv\Scripts\python.exe scripts\seed_demo.py
+
+# 3) 全量测试（含真实 PostgreSQL 检索 + 契约校验）
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+真实链路已验收：
+
+- `/internal/v1/retrieval/search` 返回 3 条候选，向量分/BM25 分/RRF 排名/页码/bbox 完整；
+- `/internal/v1/chat/stream` 的 372 条真实 SSE 事件全部通过 JSON Schema 校验；
+- DeepSeek `deepseek-flash` 生成带 `[1][2][3]` 角标的报告，usage 与 TTFT 正常回传。
+
 ## 契约与质量校验
 
 ```powershell
@@ -171,6 +193,6 @@ cd ai-engine-py
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
 | Phase 1 | 脚手架、JSON Schema 契约、pgvector 建表 | ✅ 已交付，本地 Docker 全链路已跑通 |
-| Phase 2 | 混合检索 + RRF + Rerank、LangGraph 数字员工 | 待开始 |
+| Phase 2 | 混合检索 + RRF + Rerank、LangGraph 数字员工 | ✅ 已交付，真实 DeepSeek/百炼链路已验证 |
 | Phase 3 | Redis 令牌桶、SSE 代理、前端交互与管理看板 | 待开始 |
 | Phase 4 | 容器化、阿里云部署与成本核算 | 待开始 |

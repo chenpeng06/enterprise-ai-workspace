@@ -24,16 +24,14 @@ async def _probe_postgres(settings: Settings) -> str | None:
 async def _probe_llm(settings: Settings) -> str | None:
     if not settings.llm_api_key.get_secret_value():
         return "未配置 LLM_API_KEY（Phase 1 允许，Phase 2 必需）"
-    return f"{settings.llm_base_url} / {settings.chat_model}"
+    # 仅做配置就绪检查；真实连通性由 scripts/check_models.py 验证。
+    return None
 
 
 async def _probe_embedding(settings: Settings) -> str | None:
     if not settings.embedding_api_key.get_secret_value():
         return "未配置 EMBEDDING_API_KEY（Embedding 需独立供应商，DeepSeek 官方不提供）"
-    return (
-        f"{settings.embedding_base_url} / "
-        f"{settings.embedding_model} / {settings.embedding_dimensions}d"
-    )
+    return None
 
 
 async def _probe(

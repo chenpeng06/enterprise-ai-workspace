@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 1.0.0 |
+| 文档版本 | 1.1.0 |
 | 内部契约版本 | **1.0.0** |
 | 更新日期 | 2026-11-24 |
-| 对应阶段 | Phase 1（脚手架、跨语言契约、数据库建模） |
-| 状态 | 契约已冻结；Phase 2–4 在其上增量实现 |
+| 对应阶段 | Phase 1–2（脚手架/契约/数据库、混合检索与 Agent） |
+| 状态 | Phase 2 已实现并完成真实链路验收；Phase 3–4 待继续 |
 
 > 本文档是 `gateway-go` 与 `ai-engine-py` 之间 REST / SSE 通信的**唯一契约说明**，
 > 同时给出 `PostgreSQL 16 + pgvector` 的完整建表设计。
@@ -33,7 +33,7 @@
 10. 安全设计
 11. 可观测性与 SLO
 12. 契约变更流程
-13. Phase 1 交付对照
+13. Phase 1/2 交付对照
 14. 附录
 
 ---
@@ -181,13 +181,14 @@ enterprise-ai-workspace/
 │   │   ├── core/                    # 配置、日志
 │   │   ├── contract/                # JSON Schema 运行时校验器
 │   │   ├── db/                      # asyncpg + SQLAlchemy 会话池
-│   │   ├── api/                     # 内部 REST / SSE
-│   │   ├── schemas/                 # Pydantic 响应模型
-│   │   ├── rag/                     # Phase 2：retriever.py
-│   │   ├── agents/                  # Phase 2：ops_assistant.py
-│   │   ├── tools/                   # Phase 2：日志/状态工具
-│   │   └── services/                # Phase 2：异步摄取执行器
-│   └── tests/                       # 契约加载 + 健康探针测试
+│   │   ├── api/                     # 内部 REST / SSE（health/retrieval/chat）
+│   │   ├── schemas/                 # Pydantic 请求/响应模型
+│   │   ├── rag/                     # retriever / embeddings / reranker / rewrite
+│   │   ├── agents/                  # ops_assistant.py（LangGraph）
+│   │   ├── tools/                   # 日志/状态工具（当前为模拟实现）
+│   │   └── services/                # LLM 客户端；摄取执行器待补齐
+│   ├── scripts/                     # check_models.py / seed_demo.py
+│   └── tests/                       # 契约、检索、Agent、API 测试
 ├── deploy/
 │   ├── docker-compose.yml           # 本地 PostgreSQL/Redis
 │   ├── initdb/01_schema.sql         # 完整 DDL（唯一可执行来源）
@@ -201,8 +202,9 @@ enterprise-ai-workspace/
     └── sync_architecture.py         # 把 Schema/DDL 注入本文档
 ```
 
-`docs/TASKS.md` 中 Phase 2 的目标文件已预留包结构：
-`ai-engine-py/app/rag/retriever.py`、`ai-engine-py/app/agents/ops_assistant.py`。
+`docs/TASKS.md` 中 Phase 2 的目标文件：
+`ai-engine-py/app/rag/retriever.py`、`ai-engine-py/app/agents/ops_assistant.py` 已实现；
+完整摄取任务执行器（`/ingest/tasks`）仍待后续阶段补齐。
 
 ---
 
@@ -2993,7 +2995,9 @@ COMMIT;
 
 ---
 
-## 13. Phase 1 交付对照
+## 13. Phase 1/2 交付对照
+
+### 13.1 Phase 1
 
 | TASKS Phase 1 要求 | 交付物 |
 | --- | --- |
@@ -3007,11 +3011,25 @@ COMMIT;
 | PostgreSQL 完整建表 SQL | 19 张表/分区、HNSW、GIN、BM25、RLS、日志分区 |
 | 写入 ARCHITECTURE.md | 本文档（注入完整 Schema 与 DDL） |
 
-**Phase 2 衔接点**：
+### 13.2 Phase 2
 
-- `ai-engine-py/app/rag/retriever.py` 按第 7.5 节实现向量 + BM25 + RRF + Rerank；
-- `ai-engine-py/app/agents/ops_assistant.py` 按第 7.3/7.4 节 yield SSE 事件；
-- 摄取执行器按第 6.2 节状态机落库，并通过第 6.6 节回调网关。
+| TASKS Phase 2 要求 | 实现 |
+| --- | --- |
+| 异步 SQLAlchemy/asyncpg + pgvector 向量检索 | `app/rag/retriever.py`：`<=>` 余弦召回，1024 维，按 workspace/kb/ready 文档过滤 |
+| 同一查询的 PostgreSQL 全文检索 | `content_tsv` + 逐词 OR 召回；tf 从 tsvector positions 统计，df 走 GIN |
+| RRF 融合 | 加权 RRF（默认 0.65/0.35、k=60），按 `chunk_id` 去重并保留 rank 变化 |
+| Rerank 模型接口 | `app/rag/reranker.py`；未配置时显式 `enabled=false` 降级，不用伪分数 |
+| 检索漏斗诊断 | 阶段耗时、候选数、vector/BM25/RRF/rerank 分数与排名、`rank_delta` |
+| 原文定位元数据 | `page_no`、`bbox`、`char_start/char_end`、`section_path`、`content_preview` |
+| LangGraph 数字员工 | `Planner → RAG Retrieve → Tools → Reviewer → Writer`；`mode=rag` 跳过 Planner/Tools |
+| 防幻觉拒答 | Reviewer 无证据或最高证据分 `< min_context_score` → `finish_reason=refused` |
+| 带角标报告 | Writer 输出 `[n]`，`citation` 事件携带页码/坐标/quote |
+| SSE 节点进度 | 异步队列实时 yield 10 类标准事件；API 追加 meta/事件 id/15s 心跳 |
+| 内部 API | `POST /retrieval/search`、`POST /chat/stream` 已实现 |
+| 真实验收 | DeepSeek `deepseek-flash` + 百炼 `text-embedding-v3`；372 条真实 SSE 事件逐条通过 Schema |
+
+**Phase 2 尚未覆盖**（按 TASKS 属于后续增强）：`/ingest/tasks` 的完整解析/切片/
+Embedding 执行器、回调网关与任务恢复；目前通过 `scripts/seed_demo.py` 写入演示数据。
 
 **Phase 3 衔接点**：
 
@@ -3063,12 +3081,14 @@ cd ai-engine-py && pytest -q && ruff check .
 
 ### 14.3 已知本地限制
 
-- 本地 PostgreSQL 容器不包含 `zhparser`，DDL 会自动回退 `simple` 并输出 NOTICE；
-  生产启用 `zhparser` 后需重建 `content_tsv`（`UPDATE ... SET content = content` 触发）；
-- 本地未配置 `LLM_API_KEY` / `EMBEDDING_API_KEY`，引擎健康状态为 `degraded`
-  （HTTP 200）；Phase 2 开始检索/生成前需在 `ai-engine-py/.env` 配置生成与
-  Embedding 供应商（DeepSeek 可作 LLM，但官方不提供 Embedding/Rerank）。
+- 本地 PostgreSQL 容器不包含 `zhparser`，DDL 会自动回退 `simple`；
+  中文 FTS 能力有限，当前依赖向量召回 + 查询中的英文/数字关键词参与 BM25，
+  生产启用 `zhparser` 后需重建 `content_tsv`；
+- 本地未配置 `RERANK_API_KEY`/`RERANK_BASE_URL`，检索会显式关闭 Rerank，
+  用 RRF 排名继续工作；配置后走真实 gte-rerank；
 - 本地默认密钥仅供开发，生产启动校验会拒绝弱 Token。
 
 Phase 1 已在本机 Docker Desktop（PG 16.16 + pgvector 0.8.7）实际执行完整 DDL，
 并验证 HNSW 索引命中、BM25 函数、全文触发器与 14 条 RLS 策略。
+Phase 2 使用真实 DeepSeek + 百炼 Embedding 完成检索与 SSE 问答，所有事件通过
+JSON Schema 校验。

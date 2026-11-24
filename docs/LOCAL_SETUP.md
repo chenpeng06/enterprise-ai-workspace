@@ -128,7 +128,8 @@ powershell.exe -ExecutionPolicy Bypass -File scripts\db\verify.ps1
 期望：
 
 - `/readyz` 返回 `200`，`postgres`、`redis`、`ai_engine` 均为 `ok`；
-- 引擎在未配置 `LLM_API_KEY` 时为 `degraded`（HTTP 200），这是 Phase 1 的正常状态；
+- 引擎 `llm`/`embedding` 为 `ok`（配置就绪）；真实 Key 有效性用
+  `scripts/check_models.py` 验证；
 - 前端页面状态卡片显示网关在线。
 
 本机实测通过的关键项：
@@ -154,24 +155,23 @@ powershell.exe -ExecutionPolicy Bypass -File scripts\db\verify.ps1
 
 ### 大模型 Key
 
-当前未配置 `LLM_API_KEY`，因此引擎健康状态为 `degraded`，Phase 1 的健康探针与
-网关联调不受影响。Phase 2 开始检索/生成前，需要按能力分别配置三组凭证：
+当前 `LLM_API_KEY` 使用 DeepSeek `deepseek-flash`，`EMBEDDING_API_KEY` 使用
+百炼 `text-embedding-v3`（1024 维），均已通过最小真实请求验证。
+`RERANK_API_KEY` 尚未配置，检索会显式关闭 Rerank 并继续使用 RRF 排名。
 
-```dotenv
-# 对话/Agent（DeepSeek 示例）
-LLM_BASE_URL=https://api.deepseek.com
-LLM_API_KEY=sk-<deepseek-key>
-CHAT_MODEL=deepseek-flash
+Phase 2 验收命令：
 
-# Embedding（DeepSeek 官方不提供，需百炼或本地 BGE-M3）
-EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-EMBEDDING_API_KEY=sk-<dashscope-key>
-EMBEDDING_MODEL=text-embedding-v3
+```powershell
+cd ai-engine-py
 
-# Rerank（百炼 gte-rerank 或本地 bge-reranker）
-RERANK_BASE_URL=<endpoint>
-RERANK_API_KEY=sk-<dashscope-key>
-RERANK_MODEL=gte-rerank-v2
+# 不打印 Key，只输出状态/模型/维度/耗时
+.\.venv\Scripts\python.exe scripts\check_models.py
+
+# 写入演示知识库（真实 Embedding，可重复执行）
+.\.venv\Scripts\python.exe scripts\seed_demo.py
+
+# Phase 2 全量测试
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 完整能力矩阵与 DeepSeek 接入注意事项见

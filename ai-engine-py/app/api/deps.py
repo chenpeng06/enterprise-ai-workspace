@@ -3,7 +3,9 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
 
+from app.agents.ops_assistant import OpsAssistant
 from app.core.config import Settings, get_settings
+from app.rag.retriever import HybridRetriever
 
 
 async def require_internal_token(
@@ -23,3 +25,12 @@ async def require_internal_token(
                 "stage": None,
             },
         )
+
+
+def get_retriever() -> HybridRetriever:
+    """请求级检索器；测试可通过 FastAPI dependency_overrides 替换。"""
+    return HybridRetriever()
+
+
+def get_ops_assistant() -> OpsAssistant:
+    return OpsAssistant()
