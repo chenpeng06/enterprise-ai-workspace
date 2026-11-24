@@ -238,6 +238,7 @@ class HybridRetriever:
         rerank_started = time.perf_counter()
         rerank_error: str | None = None
         rerank_enabled = bool(cfg.enable_rerank and self.reranker is not None)
+        rerank_attempted = rerank_enabled
         if rerank_enabled:
             try:
                 await self._apply_rerank(
@@ -253,7 +254,14 @@ class HybridRetriever:
                 rerank_enabled = False
                 rerank_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("Rerank 失败，降级为 RRF 排序: %s", exc)
-        rerank_ms = (time.perf_counter() - rerank_started) * 1000
+        rerank_ms = (
+            (time.perf_counter() - rerank_started) * 1000 if rerank_attempted else 0.0
+        )
+        actual_rerank_model = (
+            str(getattr(self.reranker, "model", "") or cfg.rerank_model)
+            if rerank_attempted
+            else None
+        )
 
         selected = self._select(candidates, config=cfg, rerank_enabled=rerank_enabled)
         ordered = self._diagnostic_order(candidates)
@@ -296,7 +304,7 @@ class HybridRetriever:
                 },
                 "rerank": {
                     "enabled": rerank_enabled,
-                    "model": cfg.rerank_model if rerank_enabled else None,
+                    "model": actual_rerank_model if rerank_enabled else None,
                     "top_k": cfg.top_k,
                     "score_threshold": cfg.min_rerank_score,
                     "candidates": min(len(candidates), _MAX_RERANK_CANDIDATES),

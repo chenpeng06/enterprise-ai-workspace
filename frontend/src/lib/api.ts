@@ -1,4 +1,10 @@
-import type { ChatStreamRequest, SSEEvent } from "@/types/contract";
+import type { SSEEvent } from "@/types/contract";
+import type {
+  BootstrapResponse,
+  ChunkPreview,
+  MetricsOverview,
+  PublicChatRequest,
+} from "@/types/public";
 
 import { apiUrl } from "./env";
 import { streamSSE } from "./sse";
@@ -8,6 +14,15 @@ export interface GatewayHealth {
   service: string;
   version: string;
   time: string;
+}
+
+async function readError(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: { message?: string } };
+    return body.error?.message ?? `HTTP ${response.status}`;
+  } catch {
+    return `HTTP ${response.status}`;
+  }
 }
 
 export async function fetchGatewayHealth(signal?: AbortSignal): Promise<GatewayHealth> {
@@ -23,17 +38,56 @@ export async function fetchGatewayHealth(signal?: AbortSignal): Promise<GatewayH
   return (await response.json()) as GatewayHealth;
 }
 
+export async function fetchBootstrap(signal?: AbortSignal): Promise<BootstrapResponse> {
+  const response = await fetch(apiUrl("/api/v1/bootstrap"), {
+    signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return (await response.json()) as BootstrapResponse;
+}
+
+export async function fetchChunk(
+  chunkId: string,
+  signal?: AbortSignal,
+): Promise<ChunkPreview> {
+  const response = await fetch(apiUrl(`/api/v1/chunks/${chunkId}`), {
+    signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return (await response.json()) as ChunkPreview;
+}
+
+export async function fetchMetrics(
+  hours = 24,
+  signal?: AbortSignal,
+): Promise<MetricsOverview> {
+  const response = await fetch(apiUrl(`/api/v1/admin/metrics?hours=${hours}`), {
+    signal,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  return (await response.json()) as MetricsOverview;
+}
+
 export interface StreamChatHandlers {
   onEvent: (event: SSEEvent) => void;
   onHeartbeat?: () => void;
 }
 
 /**
- * 对话流入口。Phase 3 由 gateway-go 实现 /api/v1/chat/stream 并原样透传
- * ai-engine-py 的 SSE 事件；前端只依赖 docs/ARCHITECTURE.md 中的事件契约。
+ * 公共对话入口。gateway-go 负责限流、SSE 透传与指标落库，
+ * 事件结构与内部契约保持一致。
  */
 export async function streamChat(
-  request: ChatStreamRequest,
+  request: PublicChatRequest,
   handlers: StreamChatHandlers,
   signal?: AbortSignal,
 ): Promise<void> {

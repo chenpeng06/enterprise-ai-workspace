@@ -303,13 +303,17 @@ class OpsAssistant:
             request.retrieval.enable_rerank
             and getattr(self.retriever, "reranker", None) is not None
         )
+        rerank_model = str(
+            getattr(getattr(self.retriever, "reranker", None), "model", "")
+            or request.retrieval.rerank_model
+        )
         if rerank_configured:
             await self._emit(
                 "reranking",
                 {
                     "node": "rag_retrieve",
                     "status": "started",
-                    "model": request.retrieval.rerank_model,
+                    "model": rerank_model,
                     "candidate_count": 0,
                     "top_n": request.retrieval.top_k,
                     "score_threshold": request.retrieval.min_rerank_score,
@@ -342,7 +346,7 @@ class OpsAssistant:
                 {
                     "node": "rag_retrieve",
                     "status": "failed",
-                    "model": request.retrieval.rerank_model,
+                    "model": rerank_model,
                     "candidate_count": rerank_stats["candidates"],
                     "top_n": request.retrieval.top_k,
                     "score_threshold": request.retrieval.min_rerank_score,

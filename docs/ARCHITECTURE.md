@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 1.1.0 |
+| 文档版本 | 1.2.0 |
 | 内部契约版本 | **1.0.0** |
 | 更新日期 | 2026-11-24 |
-| 对应阶段 | Phase 1–2（脚手架/契约/数据库、混合检索与 Agent） |
-| 状态 | Phase 2 已实现并完成真实链路验收；Phase 3–4 待继续 |
+| 对应阶段 | Phase 1–3（底座/检索 Agent、Go 网关与前端工作台） |
+| 状态 | Phase 3 已实现，真实对话/限流/指标落库已验证；Phase 4 待继续 |
 
 > 本文档是 `gateway-go` 与 `ai-engine-py` 之间 REST / SSE 通信的**唯一契约说明**，
 > 同时给出 `PostgreSQL 16 + pgvector` 的完整建表设计。
@@ -33,7 +33,7 @@
 10. 安全设计
 11. 可观测性与 SLO
 12. 契约变更流程
-13. Phase 1/2 交付对照
+13. Phase 1–3 交付对照
 14. 附录
 
 ---
@@ -156,23 +156,24 @@ enterprise-ai-workspace/
 │   └── src/
 │       ├── main.tsx / App.tsx / index.css
 │       ├── components/              # AppShell、StatusPanel
-│       ├── pages/                   # HomePage、NotFoundPage
-│       ├── lib/                     # api、SSE 解析器、env、cn
-│       ├── types/contract.ts        # 契约 TS 类型镜像
+│       ├── pages/                   # HomePage、ChatPage、AdminPage、NotFoundPage
+│       ├── lib/                     # 公共 API、SSE 解析器、env、cn
+│       ├── types/                   # contract 镜像 + public API 类型
 │       └── features/
-│           ├── chat/                # Phase 3：对话 + 角标联动
-│           ├── retrieval-inspector/ # Phase 3：检索透视抽屉
-│           └── admin/               # Phase 3：监控看板
+│           ├── chat/                # 对话、进度、角标联动、原文预览
+│           └── retrieval-inspector/ # 检索透视抽屉
 ├── gateway-go/                      # Go 1.23 + Gin
 │   ├── go.mod / go.sum / Makefile / .env.example
 │   ├── cmd/gateway/main.go          # 装配、优雅停机
 │   └── internal/
 │       ├── config/                  # env 解析与 fail-fast 校验
 │       ├── observability/           # slog 结构化日志
-│       ├── httpserver/              # 路由、健康探针、中间件
-│       ├── client/aiengine/         # 引擎内部 REST 客户端
+│       ├── httpserver/              # 公共/健康路由、中间件
+│       ├── chatproxy/               # SSE 透传、旁路指标、请求落库
+│       ├── ratelimit/               # Redis Lua 令牌桶与 429 中间件
+│       ├── client/aiengine/         # 引擎内部 REST/SSE 客户端
 │       ├── contract/                # SSE 事件常量与 done/usage 结构
-│       ├── store/                   # pgx 连接池
+│       ├── store/                   # pgx 连接池与 Phase 3 仓储
 │       └── cache/                   # Redis 客户端
 ├── ai-engine-py/                    # Python 3.12+ + FastAPI + LangGraph
 │   ├── pyproject.toml / Makefile / .env.example
@@ -410,6 +411,79 @@ queued ──▶ fetching ──▶ parsing ──▶ chunking ──▶ embeddi
 - 网关按 `task_id` 幂等更新 `ingest_tasks` 与 `documents`，同步写入审计日志；
 - 引擎对非 2xx 按 1 s / 5 s / 25 s 重试，最多 3 次；仍失败则将任务标记为
   `failed` 并在错误中标注 `callback_delivery_failed`，避免任务悬挂为 `running`。
+
+### 6.7 公共网关 API（Phase 3）
+
+浏览器只访问 `gateway-go` 的 `/api/v1`，由网关完成限流、参数校验、SSE 透传与
+`messages / message_citations / retrieval_traces / request_logs` 落库；不直接访问
+AI 引擎。当前本地演示使用默认租户，生产环境必须在此层增加登录态与 workspace 鉴权。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/v1/bootstrap` | 返回演示 workspace/kb 与推荐问题 |
+| `POST` | `/api/v1/chat/stream` | 公共 SSE 对话；Redis 令牌桶保护 |
+| `GET` | `/api/v1/chunks/{chunk_id}` | 原文预览：标题、页码、bbox、内容 |
+| `GET` | `/api/v1/admin/metrics?hours=24` | 限流/TTFT/Token/知识库命中率聚合 |
+
+公共流式请求（`PublicChatRequest`，与内部契约解耦）：
+
+```json
+{
+  "conversation_id": "0192f0e0-1000-7c2d-8e3f-0a1b2c3d4e5f",
+  "query": "灰度发布错误率超过阈值怎么处理？",
+  "kb_ids": ["0192f0e0-0002-7c2d-8e3f-0a1b2c3d4e5f"],
+  "mode": "agent",
+  "retrieval": {"top_k": 3, "enable_rerank": true}
+}
+```
+
+- `conversation_id` 可省略，网关生成并在首个 `meta` 事件中返回；
+- `mode` 默认 `rag`；`kb_ids` 缺省使用 `DEV_KB_ID`；
+- 事件体与第 7 节完全一致，前端无需感知内部 `X-Internal-Token`；
+- 网关在转发前创建 conversation/user/assistant 消息，在流结束后异步落库；
+- 首字延迟采用网关侧口径：从发起上游请求到收到首个非空 `generating.delta`；
+- 限流键为 `workspace + route + (X-User-Id 或客户端 IP)`，Lua 原子扣减；
+- Redis 不可用时 fail-open，`/readyz` 会暴露 Redis 异常。
+
+限流响应：
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 2
+X-RateLimit-Limit: 20
+X-RateLimit-Remaining: 0
+
+{"error":{"code":"rate_limited","message":"请求过于频繁，请稍后重试","retryable":true,"retry_after_ms":1964,"request_id":"..."}}
+```
+
+监控响应核心字段：
+
+```json
+{
+  "hours": 24,
+  "totals": {"requests": 12, "chat_requests": 10, "rate_limited": 2, "avg_ttft_ms": 2408, "p95_ttft_ms": 3711, "total_tokens": 18220},
+  "ttft_trend": [{"bucket": "2026-11-24T21:00:00+08:00", "avg_ttft_ms": 2408, "count": 10}],
+  "rate_limit_trend": [{"bucket": "2026-11-24T21:00:00+08:00", "count": 2}],
+  "knowledge_base": {"queries": 10, "hits": 9, "hit_rate": 0.9},
+  "recent_rate_limits": []
+}
+```
+
+**落库映射**：
+
+| 数据 | 表 | 说明 |
+| --- | --- | --- |
+| 会话/消息 | `conversations` / `messages` | 用户消息 completed；assistant 先 streaming 后 completed/failed/canceled |
+| 角标 | `message_citations` | 按 `message_id + citation_index` 幂等 |
+| 检索透视 | `retrieval_traces` | 保存完整 diagnostics 与各阶段候选数 |
+| 请求指标 | `request_logs` | TTFT、总耗时、Token、模型、状态码 |
+| 限流 | `rate_limit_events` | 路由、配额、观测值、Retry-After、客户端 IP |
+
+### 6.8 内部 API 实现边界
+
+Phase 2/3 已实现 `POST /internal/v1/retrieval/search` 与
+`POST /internal/v1/chat/stream`；`/internal/v1/ingest/*` 仍按 Phase 1 契约预留，
+当前演示数据由 `ai-engine-py/scripts/seed_demo.py` 写入。
 
 ---
 
@@ -2995,7 +3069,7 @@ COMMIT;
 
 ---
 
-## 13. Phase 1/2 交付对照
+## 13. Phase 1–3 交付对照
 
 ### 13.1 Phase 1
 
@@ -3031,11 +3105,26 @@ COMMIT;
 **Phase 2 尚未覆盖**（按 TASKS 属于后续增强）：`/ingest/tasks` 的完整解析/切片/
 Embedding 执行器、回调网关与任务恢复；目前通过 `scripts/seed_demo.py` 写入演示数据。
 
-**Phase 3 衔接点**：
+### 13.3 Phase 3
 
-- 网关实现公共 API、Redis 令牌桶、SSE 透传与 `request_logs` 落库；
-- 前端实现对话、角标高亮与检索透视抽屉；
-- 监控看板读取 `request_logs` / `rate_limit_events` 聚合视图。
+| TASKS Phase 3 要求 | 实现 |
+| --- | --- |
+| Redis 分布式令牌桶 | `internal/ratelimit` Lua 原子扣减；workspace+route+user/IP 维度；429/Retry-After |
+| 限流拦截日志 | 异步写 `rate_limit_events`，管理看板聚合最近 24h 次数与明细 |
+| SSE 反向代理 | `internal/chatproxy` 逐行转发并旁路解析事件，客户端断开自动终止 |
+| TTFT/总耗时/Token 统计 | 网关侧首字口径；异步写 `request_logs`；P95 与小时趋势 |
+| 对话与原文高亮联动 | React 点击 `[n]` → `GET /chunks/{id}` → 页码/bbox/quote 预览 |
+| 检索透视抽屉 | Vector/BM25/RRF/Rerank 分数、候选/入选、fused→rerank 排名变化 |
+| 管理后台 | 请求量、限流次数、平均 TTFT、知识库命中率、TTFT 趋势、限流明细 |
+| Rerank 真实验收 | 百炼 `gte-rerank-v2`：3 候选约 250–340ms，按阈值保留真实达标片段 |
+| 真实链路验收 | 网关真实 SSE 对话 + 引用 + 检索留痕落库；限流 429 与看板聚合已验证 |
+
+**Phase 4 衔接点**：
+
+- 为 `gateway-go`、`ai-engine-py`、`frontend` 增加生产 Dockerfile；
+- 将 Compose 扩展为网关/引擎/前端 + PostgreSQL/Redis 的完整本地编排；
+- 补齐阿里云 RDS/Redis/OSS/SAE/FC 部署、VPC 与月度成本核算；
+- 生产关闭 `DEV_WORKSPACE_ID` 演示租户，接入真实登录态与 workspace 鉴权。
 
 ---
 
@@ -3084,11 +3173,14 @@ cd ai-engine-py && pytest -q && ruff check .
 - 本地 PostgreSQL 容器不包含 `zhparser`，DDL 会自动回退 `simple`；
   中文 FTS 能力有限，当前依赖向量召回 + 查询中的英文/数字关键词参与 BM25，
   生产启用 `zhparser` 后需重建 `content_tsv`；
-- 本地未配置 `RERANK_API_KEY`/`RERANK_BASE_URL`，检索会显式关闭 Rerank，
-  用 RRF 排名继续工作；配置后走真实 gte-rerank；
-- 本地默认密钥仅供开发，生产启动校验会拒绝弱 Token。
+- 当前已配置百炼 `gte-rerank-v2`：3 条候选精排耗时约 250–340ms，按
+  `min_rerank_score` 过滤后只保留真实达标片段；Reranker 会校验
+  `RERANK_BASE_URL` 必须是合法 http(s) 地址，非法配置直接关闭精排；
+- 公共 `/api/v1` 当前使用 `DEV_WORKSPACE_ID` 演示租户，生产必须替换为登录态与
+  workspace 鉴权；本机默认密钥仅供开发，生产启动校验会拒绝弱 Token。
 
 Phase 1 已在本机 Docker Desktop（PG 16.16 + pgvector 0.8.7）实际执行完整 DDL，
 并验证 HNSW 索引命中、BM25 函数、全文触发器与 14 条 RLS 策略。
 Phase 2 使用真实 DeepSeek + 百炼 Embedding 完成检索与 SSE 问答，所有事件通过
-JSON Schema 校验。
+JSON Schema 校验。Phase 3 已验证网关真实 SSE 透传、Redis 429、消息/引用/检索
+留痕/请求日志落库，以及前端角标联动和监控看板。

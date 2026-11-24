@@ -12,6 +12,7 @@ import json
 import logging
 from collections.abc import Sequence
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -38,7 +39,10 @@ class DashScopeReranker:
 
     @property
     def configured(self) -> bool:
-        return bool(self.base_url and self.api_key)
+        if not self.api_key or not self.base_url:
+            return False
+        parsed = urlparse(self.base_url)
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
     async def rerank(self, query: str, documents: Sequence[str]) -> list[float]:
         if not self.configured:

@@ -3,6 +3,7 @@
 package aiengine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,9 +16,10 @@ import (
 const maxHealthBodyBytes = 1 << 20
 
 type Client struct {
-	baseURL    string
-	token      string
-	httpClient *http.Client
+	baseURL      string
+	token        string
+	httpClient   *http.Client
+	streamClient *http.Client
 }
 
 func New(baseURL, token string, timeout time.Duration) *Client {
@@ -27,6 +29,8 @@ func New(baseURL, token string, timeout time.Duration) *Client {
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
+		// SSE 是长连接，不能设置全局 Timeout；空闲超时由代理层按事件控制。
+		streamClient: &http.Client{},
 	}
 }
 
@@ -44,7 +48,6 @@ type Health struct {
 	Checks          map[string]HealthCheck `json:"checks"`
 }
 
-// Health 调用 GET /internal/v1/health。
 func (c *Client) Health(ctx context.Context) (*Health, error) {
 	request, err := http.NewRequestWithContext(
 		ctx,
@@ -83,6 +86,37 @@ func (c *Client) Health(ctx context.Context) (*Health, error) {
 		return nil, fmt.Errorf("解析 AI 引擎健康检查响应失败: %w", err)
 	}
 	return &health, nil
+}
+
+// OpenChatStream 建立内部 SSE 连接。调用方负责关闭 response.Body。
+func (c *Client) OpenChatStream(
+	ctx context.Context,
+	payload []byte,
+	headers map[string]string,
+) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/internal/v1/chat/stream",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("构造 AI 引擎流式请求失败: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "text/event-stream")
+	request.Header.Set("X-Internal-Token", c.token)
+	for key, value := range headers {
+		if value != "" {
+			request.Header.Set(key, value)
+		}
+	}
+
+	response, err := c.streamClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("连接 AI 引擎流失败: %w", err)
+	}
+	return response, nil
 }
 
 func truncate(value string, limit int) string {

@@ -121,6 +121,11 @@ curl.exe http://127.0.0.1:8080/readyz
 curl.exe -H "X-Internal-Token: dev-internal-token-change-me" `
   http://127.0.0.1:8000/internal/v1/health
 
+# Phase 3 公共 API
+curl.exe http://127.0.0.1:8080/api/v1/bootstrap
+curl.exe http://127.0.0.1:8080/api/v1/admin/metrics?hours=24
+curl.exe http://127.0.0.1:8080/api/v1/chunks/0192f0e0-0020-7c2d-8e3f-0a1b2c3d4e5f
+
 # 数据库冒烟测试（事务内 ROLLBACK，不污染数据）
 powershell.exe -ExecutionPolicy Bypass -File scripts\db\verify.ps1
 ```
@@ -130,7 +135,17 @@ powershell.exe -ExecutionPolicy Bypass -File scripts\db\verify.ps1
 - `/readyz` 返回 `200`，`postgres`、`redis`、`ai_engine` 均为 `ok`；
 - 引擎 `llm`/`embedding` 为 `ok`（配置就绪）；真实 Key 有效性用
   `scripts/check_models.py` 验证；
-- 前端页面状态卡片显示网关在线。
+- 前端页面状态卡片显示网关在线；
+- 对话页 `http://127.0.0.1:5173/chat` 可流式回答，点击 `[n]` 展示原文；
+- 看板 `http://127.0.0.1:5173/admin` 显示 TTFT / 限流 / 命中率。
+
+Phase 3 页面：
+
+| 对话 + 角标联动 | 检索透视 |
+| --- | --- |
+| ![对话与原文高亮](assets/phase3-chat-citation.png) | ![检索透视](assets/phase3-retrieval-inspector.png) |
+
+![管理看板](assets/phase3-admin-dashboard.png)
 
 本机实测通过的关键项：
 
@@ -156,8 +171,9 @@ powershell.exe -ExecutionPolicy Bypass -File scripts\db\verify.ps1
 ### 大模型 Key
 
 当前 `LLM_API_KEY` 使用 DeepSeek `deepseek-flash`，`EMBEDDING_API_KEY` 使用
-百炼 `text-embedding-v3`（1024 维），均已通过最小真实请求验证。
-`RERANK_API_KEY` 尚未配置，检索会显式关闭 Rerank 并继续使用 RRF 排名。
+百炼 `text-embedding-v3`（1024 维）与 `gte-rerank-v2` 均已通过真实请求验证。
+Rerank 当前启用，检索会输出真实 `rerank_score` 并按阈值过滤；如果
+`RERANK_BASE_URL` 不是合法 http(s) 地址，Reranker 会自动关闭精排并回退 RRF。
 
 Phase 2 验收命令：
 

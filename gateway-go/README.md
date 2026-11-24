@@ -3,17 +3,20 @@
 项目入口与治理层：鉴权、租户上下文、Redis 分布式限流、业务 CRUD、SSE 流式代理、
 TTFT / Token 统计与审计。**不包含**任何 RAG、文档解析或 Agent 编排逻辑。
 
-## Phase 1 交付范围
+## Phase 1/3 交付范围
 
 - 可直接运行的 Gin 服务骨架：结构化日志、请求 ID、优雅停机；
 - 配置加载与 fail-fast 校验（`.env` + 环境变量）；
 - PostgreSQL（pgx）与 Redis（go-redis）客户端；
 - `/healthz`、`/readyz`、`/version` 健康探针，`/readyz` 并发探测
   PostgreSQL / Redis / AI 引擎，并校验契约版本 `1.0.0`；
+- Redis Lua 分布式令牌桶（workspace + route + user/IP），429 + `Retry-After`，
+  限流事件异步写 `rate_limit_events`；
+- `/api/v1/chat/stream` SSE 代理：逐行透传、旁路解析 TTFT/Token/引用/检索诊断，
+  流结束后异步写 `messages`、`message_citations`、`retrieval_traces`、`request_logs`；
+- `/api/v1/chunks/{id}` 原文预览、`/api/v1/admin/metrics` 监控聚合；
 - 与 `docs/contracts/ai-engine-internal-v1.schema.json` 对齐的事件常量与
   `done` / `usage` / `citation` 消息类型。
-
-限流、SSE 代理、监控落库等核心业务在 Phase 3 实现。
 
 ## 目录结构
 
@@ -25,12 +28,14 @@ gateway-go/
 │   ├── observability/            # slog 结构化日志
 │   ├── httpserver/
 │   │   ├── server.go             # http.Server 生命周期
-│   │   ├── router.go             # 路由注册（Phase 3 扩展点）
+│   │   ├── router.go             # 公共/健康路由注册
 │   │   ├── health.go             # 存活/就绪探针
 │   │   └── middleware/           # 请求 ID、访问日志
-│   ├── client/aiengine/          # AI 引擎内部 REST 客户端
+│   ├── chatproxy/                # SSE 透传 + 指标/落库
+│   ├── ratelimit/                # Redis Lua 令牌桶
+│   ├── client/aiengine/          # 引擎内部 REST/SSE 客户端
 │   ├── contract/                 # 内部契约常量与流式消息结构
-│   ├── store/                    # pgx 连接池
+│   ├── store/                    # pgx 连接池 + Phase 3 仓储
 │   └── cache/                    # Redis 客户端
 ├── .env.example
 ├── Makefile
@@ -53,7 +58,9 @@ go run ./cmd/gateway
 ```bash
 curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/readyz
-curl http://127.0.0.1:8080/version
+curl http://127.0.0.1:8080/api/v1/bootstrap
+curl http://127.0.0.1:8080/api/v1/admin/metrics?hours=24
+go test ./...
 ```
 
 > 已在 Go 1.23.4 下验证 `go build` / `go vet` / `go test`。
@@ -62,6 +69,19 @@ curl http://127.0.0.1:8080/version
 
 `/readyz` 在任一依赖不可用时返回 `503` 与逐项诊断，便于本地排查
 （例如 PostgreSQL 未启动时 `postgres.status=down`）。
+
+## 公共 API
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/v1/bootstrap` | 演示租户与推荐问题 |
+| POST | `/api/v1/chat/stream` | SSE 对话；Redis 限流 + 指标落库 |
+| GET | `/api/v1/chunks/{id}` | 文档切片预览（页码/bbox/quote） |
+| GET | `/api/v1/admin/metrics?hours=24` | 限流/TTFT/Token/命中率 |
+
+`POST /api/v1/chat/stream` 的请求体见 `docs/ARCHITECTURE.md` 第 6.7 节。
+网关在 SSE 转发过程中旁路解析 `generating` / `citation` / `retrieval` /
+`usage` / `done`，不会改变引擎事件顺序或字节内容。
 
 ## 环境变量
 
@@ -74,6 +94,10 @@ curl http://127.0.0.1:8080/version
 | `INTERNAL_TOKEN` | dev 默认值 | 内网共享密钥，生产必须替换 |
 | `DATABASE_URL` | 本地 workspace 库 | PostgreSQL 连接串 |
 | `REDIS_ADDR` | `127.0.0.1:6379` | Redis 地址 |
+| `DEV_WORKSPACE_ID` | 演示 workspace | Phase 3 本地演示租户 |
+| `DEV_KB_ID` | 演示知识库 | Phase 3 默认知识库 |
+| `RATE_LIMIT_CAPACITY` | 20 | 令牌桶容量 |
+| `RATE_LIMIT_REFILL_PER_SECOND` | 0.5 | 每秒补充令牌数 |
 | `CORS_ORIGINS` | `http://127.0.0.1:5173` | 逗号分隔的前端来源 |
 
 完整列表见 `.env.example`。

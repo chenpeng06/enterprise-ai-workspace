@@ -3,13 +3,17 @@ import { NavLink, Outlet } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { CONTRACT_VERSION } from "@/types/contract";
 
-const NAV_ITEMS = [{ to: "/", label: "工作台", end: true }] as const;
+const NAV_ITEMS = [
+  { to: "/", label: "工作台", end: true },
+  { to: "/chat", label: "数字员工", end: false },
+  { to: "/admin", label: "监控看板", end: false },
+] as const;
 
 export function AppShell() {
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4 px-4 py-4 sm:px-6">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-4 py-4 sm:px-6">
           <NavLink to="/" className="flex items-center gap-3">
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-brand-500 font-mono text-sm font-bold text-white">
               AI
@@ -49,14 +53,14 @@ export function AppShell() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 sm:px-6">
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6">
         <Outlet />
       </main>
 
       <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-          <span>Phase 1 · 项目脚手架与跨语言通信契约</span>
-          <span className="font-mono">gateway-go ⇄ ai-engine-py · SSE · pgvector</span>
+        <div className="mx-auto flex max-w-7xl flex-col gap-1 px-4 py-5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+          <span>Phase 3 · 对话、原文溯源与监控看板</span>
+          <span className="font-mono">Redis Token Bucket · SSE Proxy · TTFT · pgvector</span>
         </div>
       </footer>
     </div>

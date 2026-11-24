@@ -124,7 +124,8 @@ DeepSeek 官方 API 当前不提供 Embedding/Rerank，不能只用一个 DeepSe
 1. `app/rag/retriever.py`：
    - 同一查询下执行 pgvector 余弦召回与 PostgreSQL `content_tsv` 关键词召回；
    - 词项 OR 召回 + BM25（tf 从 tsvector positions 统计，df 走 GIN）；
-   - 加权 RRF 融合、可选 Rerank（未配置时显式 `enabled=false` 而非伪分数）；
+   - 加权 RRF 融合、百炼 `gte-rerank-v2` 精排（未配置/非法 URL 时显式
+     `enabled=false`，不生成伪分数）；
    - 返回各阶段得分/排名、rank_delta、页码、bbox、字符偏移。
 2. `app/agents/ops_assistant.py`：
    - LangGraph 状态机：`Planner → RAG Retrieve → Tools → Reviewer → Writer`；

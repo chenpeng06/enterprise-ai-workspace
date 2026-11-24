@@ -41,3 +41,7 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# 编辑器原子写入临时目录
+*.tmpdir/
+*.tmp

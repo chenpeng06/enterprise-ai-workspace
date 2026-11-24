@@ -19,6 +19,9 @@ export default defineConfig(({ mode }) => {
       host: "127.0.0.1",
       port: 5173,
       strictPort: true,
+      watch: {
+        ignored: ["**/*.tmpdir/**", "**/*.tmp", "**/.*.tmpdir/**"],
+      },
       proxy: {
         "/api": { target: gatewayTarget, changeOrigin: true },
         "/healthz": { target: gatewayTarget, changeOrigin: true },

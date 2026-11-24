@@ -1,3 +1,5 @@
+import { Link } from "react-router-dom";
+
 import { StatusPanel } from "@/components/StatusPanel";
 import { SSE_EVENT_NAMES } from "@/types/contract";
 
@@ -33,22 +35,22 @@ const PHASES = [
     phase: "Phase 1",
     title: "脚手架与跨语言契约",
     description: "四端目录、依赖配置、JSON Schema 与 pgvector 建模",
-    status: "本次交付",
-    active: true,
+    status: "已交付",
+    active: false,
   },
   {
     phase: "Phase 2",
     title: "Python AI 引擎",
     description: "混合检索、RRF、Rerank 与 LangGraph 数字员工",
-    status: "待开始",
+    status: "已交付",
     active: false,
   },
   {
     phase: "Phase 3",
     title: "Go 网关与前端工作台",
     description: "Redis 令牌桶、SSE 代理、溯源高亮与监控看板",
-    status: "待开始",
-    active: false,
+    status: "本次交付",
+    active: true,
   },
   {
     phase: "Phase 4",
@@ -65,21 +67,35 @@ export function HomePage() {
       <section className="overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-white to-brand-50 p-8 shadow-card sm:p-10">
         <div className="max-w-3xl space-y-4">
           <span className="inline-flex items-center rounded-full border border-brand-100 bg-brand-50 px-3 py-1 font-mono text-xs font-semibold text-brand-700">
-            PHASE 1 · FOUNDATION
+            PHASE 3 · AGENT WORKBENCH
           </span>
           <h1 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-            多语言微服务底座已经就位
+            从提问、溯源到监控，闭环已经打通
           </h1>
           <p className="text-base leading-7 text-slate-600">
-            面向企业知识库与数字员工场景：Go 网关承担高并发入口与流式代理，Python
-            引擎负责混合检索与多智能体编排，前端工作台实现角标溯源与检索透视。
+            数字员工先规划再检索，回答中的每个 [n] 都能联动右侧原文定位；网关旁路
+            采集 TTFT、Token 与限流数据，管理看板实时呈现检索命中与系统健康度。
           </p>
           <div className="flex flex-wrap gap-2 pt-1">
             <span className="chip">Hybrid Search</span>
             <span className="chip">pgvector / RRF</span>
             <span className="chip">LangGraph</span>
             <span className="chip">SSE Streaming</span>
-            <span className="chip">Multi-tenant</span>
+            <span className="chip">Redis Rate Limit</span>
+          </div>
+          <div className="flex flex-wrap gap-3 pt-2">
+            <Link
+              to="/chat"
+              className="rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-600"
+            >
+              进入数字员工工作台
+            </Link>
+            <Link
+              to="/admin"
+              className="rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+            >
+              查看监控看板
+            </Link>
           </div>
         </div>
       </section>

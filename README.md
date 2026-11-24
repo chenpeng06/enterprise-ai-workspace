@@ -3,9 +3,9 @@
 面向企业研发运维场景的全栈 AI 项目：知识库问答、原文角标溯源、检索过程透视、
 数字员工多智能体工作流，以及网关限流/TTFT/Token 监控。
 
-> 当前进度：**Phase 1 + Phase 2 已完成** —— 四端脚手架、跨语言契约、
-> pgvector 建模，以及混合检索（向量 + BM25 + RRF + Rerank）与 LangGraph
-> 数字员工。Phase 3 开始实现 Go 限流、SSE 代理与前端交互。
+> 当前进度：**Phase 1–3 已完成** —— 脚手架与契约、混合检索与 LangGraph 数字员工，
+> 以及 Go 网关限流/SSE 代理与 React 对话、角标联动、检索透视、监控看板。
+> 下一步 Phase 4：生产容器化与阿里云部署。
 
 ## 架构一览
 
@@ -144,6 +144,39 @@ cd ai-engine-py
 - `/internal/v1/chat/stream` 的 372 条真实 SSE 事件全部通过 JSON Schema 校验；
 - DeepSeek `deepseek-flash` 生成带 `[1][2][3]` 角标的报告，usage 与 TTFT 正常回传。
 
+## Phase 3 验证与演示
+
+```powershell
+# 全栈一键启动；gateway 构建、engine/frontend 启动
+.\scripts\dev\start-all.ps1
+
+# 对话 + 原文高亮 + 检索透视
+# http://127.0.0.1:5173/chat
+
+# 管理看板
+# http://127.0.0.1:5173/admin
+
+# 网关测试与前端构建
+cd gateway-go; go test ./...
+cd ..\frontend; npm run lint; npm run build
+```
+
+已验证：
+
+- 公共 `POST /api/v1/chat/stream` 真实透传 SSE，网关旁路记录 TTFT/Token/引用/检索诊断；
+- `messages`、`message_citations`、`retrieval_traces`、`request_logs` 实际落库；
+- Redis 令牌桶 20 配额耗尽后返回 `429 + Retry-After`，并写入 `rate_limit_events`；
+- 前端点击回答中的 `[n]`，右侧自动展示文档标题、页码、bbox 命中框与高亮 quote；
+- 检索透视展示 Vector/BM25/RRF/Rerank 得分及 `fused → rerank` 排名变化；
+- 百炼 `gte-rerank-v2` 已真实启用：3 条候选精排约 250–340ms，按阈值过滤；
+- 看板展示请求量、限流次数、平均/P95 TTFT、知识库命中率与限流明细。
+
+| 页面 | 截图 |
+| --- | --- |
+| 对话 + 角标联动 | ![聊天与原文高亮](docs/assets/phase3-chat-citation.png) |
+| 检索透视 | ![检索透视](docs/assets/phase3-retrieval-inspector.png) |
+| 管理看板 | ![管理看板](docs/assets/phase3-admin-dashboard.png) |
+
 ## 契约与质量校验
 
 ```powershell
@@ -194,5 +227,5 @@ cd ai-engine-py
 | --- | --- | --- |
 | Phase 1 | 脚手架、JSON Schema 契约、pgvector 建表 | ✅ 已交付，本地 Docker 全链路已跑通 |
 | Phase 2 | 混合检索 + RRF + Rerank、LangGraph 数字员工 | ✅ 已交付，真实 DeepSeek/百炼链路已验证 |
-| Phase 3 | Redis 令牌桶、SSE 代理、前端交互与管理看板 | 待开始 |
+| Phase 3 | Redis 令牌桶、SSE 代理、前端交互与管理看板 | ✅ 已交付，真实 SSE/限流/落库/看板已验证 |
 | Phase 4 | 容器化、阿里云部署与成本核算 | 待开始 |

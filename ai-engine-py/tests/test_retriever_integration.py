@@ -36,6 +36,7 @@ class FakeEmbeddingClient:
 
 class FakeReranker:
     configured = True
+    model = "fake-rerank"
 
     async def rerank(self, query: str, documents: list[str]) -> list[float]:
         return [0.1 if "rollback" in document else 0.9 for document in documents]
@@ -204,6 +205,7 @@ async def test_hybrid_retrieval_funnel_and_contract() -> None:
             "RetrievalSearchResponse",
         )
         assert reranked.diagnostics["stages"]["rerank"]["enabled"] is True
+        assert reranked.diagnostics["stages"]["rerank"]["model"] == "fake-rerank"
         assert reranked.diagnostics["stages"]["rerank"]["passed"] == 1
         assert reranked.selected[0].chunk_id == str(chunk_b)
         assert reranked.selected[0].rerank_score == 0.9

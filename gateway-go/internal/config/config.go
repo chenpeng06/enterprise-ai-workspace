@@ -12,6 +12,8 @@ import (
 const (
 	defaultInternalToken = "dev-internal-token-change-me"
 	defaultDatabaseURL   = "postgres://workspace:workspace@127.0.0.1:5432/workspace?sslmode=disable"
+	defaultWorkspaceID   = "0192f0e0-0001-7c2d-8e3f-0a1b2c3d4e5f"
+	defaultKBID          = "0192f0e0-0002-7c2d-8e3f-0a1b2c3d4e5f"
 )
 
 // Config 是网关的全部启动配置，全部来自环境变量（支持 .env 文件）。
@@ -38,6 +40,14 @@ type Config struct {
 
 	LogLevel    string
 	CORSOrigins []string
+
+	// 本地演示租户（Phase 3 前端无需登录即可体验）
+	DevWorkspaceID string
+	DevKBID        string
+
+	// Redis 分布式令牌桶
+	RateLimitCapacity        int
+	RateLimitRefillPerSecond float64
 }
 
 // Load 读取并校验配置。任何非法值都会在启动阶段直接失败（fail fast）。
@@ -87,25 +97,37 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	rateLimitCapacity, err := intEnv("RATE_LIMIT_CAPACITY", 20, 1, 10000)
+	if err != nil {
+		return nil, err
+	}
+	rateLimitRefill, err := floatEnv("RATE_LIMIT_REFILL_PER_SECOND", 0.5, 0.001, 1000)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &Config{
-		Env:               strings.TrimSpace(getEnv("APP_ENV", "development")),
-		Version:           strings.TrimSpace(getEnv("APP_VERSION", "dev")),
-		HTTPAddr:          strings.TrimSpace(getEnv("HTTP_ADDR", ":8080")),
-		ReadHeaderTimeout: readHeaderTimeout,
-		WriteTimeout:      writeTimeout,
-		IdleTimeout:       idleTimeout,
-		ShutdownTimeout:   shutdownTimeout,
-		AIEngineBaseURL:   strings.TrimRight(strings.TrimSpace(getEnv("AI_ENGINE_BASE_URL", "http://127.0.0.1:8000")), "/"),
-		AIEngineTimeout:   engineTimeout,
-		InternalToken:     strings.TrimSpace(getEnv("INTERNAL_TOKEN", defaultInternalToken)),
-		DatabaseURL:       strings.TrimSpace(getEnv("DATABASE_URL", defaultDatabaseURL)),
-		DBMaxConns:        int32(dbMaxConns),
-		RedisAddr:         strings.TrimSpace(getEnv("REDIS_ADDR", "127.0.0.1:6379")),
-		RedisPassword:     os.Getenv("REDIS_PASSWORD"),
-		RedisDB:           redisDB,
-		LogLevel:          strings.ToLower(strings.TrimSpace(getEnv("LOG_LEVEL", "info"))),
-		CORSOrigins:       splitCSV(getEnv("CORS_ORIGINS", "http://127.0.0.1:5173")),
+		Env:                      strings.TrimSpace(getEnv("APP_ENV", "development")),
+		Version:                  strings.TrimSpace(getEnv("APP_VERSION", "dev")),
+		HTTPAddr:                 strings.TrimSpace(getEnv("HTTP_ADDR", ":8080")),
+		ReadHeaderTimeout:        readHeaderTimeout,
+		WriteTimeout:             writeTimeout,
+		IdleTimeout:              idleTimeout,
+		ShutdownTimeout:          shutdownTimeout,
+		AIEngineBaseURL:          strings.TrimRight(strings.TrimSpace(getEnv("AI_ENGINE_BASE_URL", "http://127.0.0.1:8000")), "/"),
+		AIEngineTimeout:          engineTimeout,
+		InternalToken:            strings.TrimSpace(getEnv("INTERNAL_TOKEN", defaultInternalToken)),
+		DatabaseURL:              strings.TrimSpace(getEnv("DATABASE_URL", defaultDatabaseURL)),
+		DBMaxConns:               int32(dbMaxConns),
+		RedisAddr:                strings.TrimSpace(getEnv("REDIS_ADDR", "127.0.0.1:6379")),
+		RedisPassword:            os.Getenv("REDIS_PASSWORD"),
+		RedisDB:                  redisDB,
+		LogLevel:                 strings.ToLower(strings.TrimSpace(getEnv("LOG_LEVEL", "info"))),
+		CORSOrigins:              splitCSV(getEnv("CORS_ORIGINS", "http://127.0.0.1:5173")),
+		DevWorkspaceID:           strings.TrimSpace(getEnv("DEV_WORKSPACE_ID", defaultWorkspaceID)),
+		DevKBID:                  strings.TrimSpace(getEnv("DEV_KB_ID", defaultKBID)),
+		RateLimitCapacity:        rateLimitCapacity,
+		RateLimitRefillPerSecond: rateLimitRefill,
 	}
 
 	switch cfg.Env {
@@ -136,6 +158,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.Env == "production" && (cfg.InternalToken == defaultInternalToken || len(cfg.InternalToken) < 32) {
 		return nil, fmt.Errorf("生产环境的 INTERNAL_TOKEN 必须替换默认值且长度不小于 32")
+	}
+	if cfg.DevWorkspaceID == "" || cfg.DevKBID == "" {
+		return nil, fmt.Errorf("DEV_WORKSPACE_ID / DEV_KB_ID 不能为空")
 	}
 
 	return cfg, nil
@@ -171,6 +196,21 @@ func intEnv(key string, fallback, minValue, maxValue int) (int, error) {
 	}
 	if value < minValue || value > maxValue {
 		return 0, fmt.Errorf("环境变量 %s 必须在 [%d, %d] 范围内，当前为 %d", key, minValue, maxValue, value)
+	}
+	return value, nil
+}
+
+func floatEnv(key string, fallback, minValue, maxValue float64) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("环境变量 %s 必须是数字: %w", key, err)
+	}
+	if value < minValue || value > maxValue {
+		return 0, fmt.Errorf("环境变量 %s 必须在 [%g, %g] 范围内，当前为 %g", key, minValue, maxValue, value)
 	}
 	return value, nil
 }
