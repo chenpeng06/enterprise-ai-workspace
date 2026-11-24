@@ -1,0 +1,20 @@
+{
+  "event": "citation",
+  "id": 10,
+  "data": {
+    "message_id": "0192f0a1-0002-7c2d-8e3f-0a1b2c3d4e5f",
+    "citation": {
+      "index": 1,
+      "chunk_id": "0192f0a1-0006-7c2d-8e3f-0a1b2c3d4e5f",
+      "parent_chunk_id": "0192f0a1-0007-7c2d-8e3f-0a1b2c3d4e5f",
+      "document_id": "0192f0a1-0005-7c2d-8e3f-0a1b2c3d4e5f",
+      "document_title": "研发运维规范 v2.3",
+      "page_no": 18,
+      "bbox": { "x0": 0.128, "y0": 0.412, "x1": 0.871, "y1": 0.567 },
+      "char_start": 320,
+      "char_end": 598,
+      "quote": "灰度批次内新版本错误率连续 5 分钟超过 1%，或 P99 延迟超过基线 50%，由发布平台自动触发回滚。",
+      "rerank_score": 0.9412
+    }
+  }
+}

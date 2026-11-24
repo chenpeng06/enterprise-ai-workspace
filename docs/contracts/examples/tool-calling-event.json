@@ -1,0 +1,25 @@
+{
+  "event": "tool_calling",
+  "id": 4,
+  "data": {
+    "call_id": "call-7f3a9c",
+    "node": "tools",
+    "tool_name": "analyze_service_logs",
+    "arguments": {
+      "service": "order-api",
+      "environment": "gray",
+      "window_minutes": 30,
+      "level": "ERROR"
+    },
+    "status": "succeeded",
+    "result_summary": "近 30 分钟灰度实例错误率 2.7%，高于 1% 阈值；主要异常为下游库存服务超时。",
+    "result": {
+      "error_rate": 0.027,
+      "threshold": 0.01,
+      "sample_size": 18420,
+      "top_error_code": "UPSTREAM_TIMEOUT"
+    },
+    "latency_ms": 1284.2,
+    "error": null
+  }
+}

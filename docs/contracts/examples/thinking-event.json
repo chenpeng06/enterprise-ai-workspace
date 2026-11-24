@@ -1,0 +1,38 @@
+{
+  "event": "thinking",
+  "id": 2,
+  "data": {
+    "node": "planner",
+    "step_index": 0,
+    "step_id": "plan-1",
+    "status": "succeeded",
+    "title": "任务拆解",
+    "detail": "将问题拆解为规范检索、日志核验与结论生成三步。",
+    "started_at": "2026-11-24T11:02:21.120Z",
+    "latency_ms": 842.6,
+    "plan": [
+      {
+        "step_index": 0,
+        "action": "retrieve",
+        "description": "检索灰度发布与自动回滚相关的研发规范"
+      },
+      {
+        "step_index": 1,
+        "action": "tool",
+        "description": "分析最近一次灰度批次的错误日志",
+        "tool_name": "analyze_service_logs"
+      },
+      {
+        "step_index": 2,
+        "action": "review",
+        "description": "核查证据是否覆盖所有结论"
+      },
+      {
+        "step_index": 3,
+        "action": "answer",
+        "description": "生成带角标的结构化处置建议"
+      }
+    ],
+    "attributes": { "intent": "ops_runbook_lookup", "detected_language": "zh" }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "status": "ok",
+  "service": "ai-engine-py",
+  "version": "0.1.0",
+  "contract_version": "1.0.0",
+  "server_time": "2026-11-24T11:02:20.500Z",
+  "uptime_seconds": 18422.7,
+  "checks": {
+    "postgres": { "status": "ok", "latency_ms": 3.2, "message": null },
+    "llm": { "status": "ok", "latency_ms": 41.8, "message": "dashscope / qwen-plus" },
+    "embedding": { "status": "ok", "latency_ms": 18.4, "message": "text-embedding-v3 / 1024d" },
+    "object_storage": { "status": "ok", "latency_ms": 6.1, "message": "oss-cn-hangzhou" }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "llm_timeout",
+    "message": "上游大模型在 60s 内未返回首包，已中止本次生成。",
+    "retryable": true,
+    "trace_id": "0192f0a1-0008-7c2d-8e3f-0a1b2c3d4e5f",
+    "stage": "generation",
+    "details": { "upstream": "dashscope", "timeout_ms": 60000, "model": "qwen-plus" }
+  }
+}

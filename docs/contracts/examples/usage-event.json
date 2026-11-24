@@ -1,0 +1,14 @@
+{
+  "event": "usage",
+  "id": 15,
+  "data": {
+    "message_id": "0192f0a1-0002-7c2d-8e3f-0a1b2c3d4e5f",
+    "usage": {
+      "prompt_tokens": 2864,
+      "completion_tokens": 612,
+      "total_tokens": 3476,
+      "model": "qwen-plus",
+      "estimated_cost_cny": 0.0104
+    }
+  }
+}

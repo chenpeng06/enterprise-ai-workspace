@@ -1,0 +1,15 @@
+{
+  "event": "reranking",
+  "id": 7,
+  "data": {
+    "node": "rag_retrieve",
+    "status": "succeeded",
+    "model": "bge-reranker-v2-m3",
+    "candidate_count": 52,
+    "top_n": 8,
+    "score_threshold": 0.2,
+    "passed_count": 3,
+    "latency_ms": 412.4,
+    "error": null
+  }
+}

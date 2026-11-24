@@ -1,0 +1,47 @@
+{
+  "workspace_id": "0192f0a0-7c1e-7a3b-9f2d-1a2b3c4d5e6f",
+  "knowledge_base_id": "0192f0a1-0004-7c2d-8e3f-0a1b2c3d4e5f",
+  "document_id": "0192f0a1-0005-7c2d-8e3f-0a1b2c3d4e5f",
+  "requested_by": "0192f0a1-0003-7c2d-8e3f-0a1b2c3d4e5f",
+  "idempotency_key": "ingest:9f2c8e1d4b6a3f5c7e8d9a0b1c2d3e4f",
+  "document": {
+    "title": "研发运维规范 v2.3",
+    "file_name": "研发运维规范_v2.3.pdf",
+    "mime_type": "application/pdf",
+    "size_bytes": 8457216,
+    "sha256": "9f2c8e1d4b6a3f5c7e8d9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
+    "language": "zh",
+    "source": {
+      "type": "oss",
+      "uri": "oss://enterprise-ai-workspace-prod/kb/2026/11/9f2c8e1d/研发运维规范_v2.3.pdf",
+      "headers": {},
+      "expires_at": null
+    }
+  },
+  "parse": {
+    "ocr_enabled": true,
+    "ocr_languages": ["zh", "en"],
+    "layout_analysis": true,
+    "extract_tables": true,
+    "table_format": "markdown",
+    "ignore_header_footer": true,
+    "max_pages": 500
+  },
+  "chunking": {
+    "strategy": "hierarchical",
+    "parent_chunk_size": 2000,
+    "child_chunk_size": 400,
+    "child_overlap": 80,
+    "min_chunk_size": 80,
+    "splitter": "auto",
+    "keep_table_intact": true
+  },
+  "embedding": {
+    "model": "text-embedding-v3",
+    "dimensions": 1024,
+    "batch_size": 16,
+    "normalize": true
+  },
+  "callback_url": "http://gateway-go:8080/internal/v1/ingest/callbacks",
+  "metadata": { "upload_channel": "admin_console", "source_bucket": "enterprise-ai-workspace-prod" }
+}

@@ -1,0 +1,1211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://enterprise-ai-workspace.local/contracts/ai-engine-internal-v1.schema.json",
+  "title": "Enterprise AI Workspace / ai-engine-py Internal Contract",
+  "description": "gateway-go 与 ai-engine-py 之间的内部 REST + SSE 通信契约（v1.0.0）。根 Schema 的 oneOf 覆盖全部请求 / 响应 / SSE 事件消息体，可用 jsonschema 直接校验单条消息。SSE 消息的 JSON 出现在 data: 行，event: 行由 event 字段同名校验。",
+  "x-contract-version": "1.0.0",
+  "x-transport": "HTTP/1.1 + text/event-stream",
+  "x-internal-base-path": "/internal/v1",
+  "$defs": {
+    "Uuid": {
+      "type": "string",
+      "format": "uuid",
+      "description": "RFC 4122 UUID（建议 v7，便于按时间排序）。"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 时间戳，必须带时区偏移，统一使用 UTC。"
+    },
+    "Metadata": {
+      "type": "object",
+      "description": "开放扩展元数据，键值均为 JSON 原生类型；禁止写入凭据与个人敏感信息。",
+      "additionalProperties": true,
+      "maxProperties": 40
+    },
+    "BoundingBox": {
+      "type": "object",
+      "description": "PDF 页内归一化坐标，原点位于页面左上角，x 轴向右、y 轴向下，取值区间 [0,1]，可直接乘以页面渲染宽高做高亮。",
+      "additionalProperties": false,
+      "required": ["x0", "y0", "x1", "y1"],
+      "properties": {
+        "x0": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y0": { "type": "number", "minimum": 0, "maximum": 1 },
+        "x1": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y1": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "ErrorCode": {
+      "type": "string",
+      "description": "稳定的机器可读错误码。前端仅依赖该枚举做分支，不解析 message。",
+      "enum": [
+        "invalid_request",
+        "unauthorized",
+        "forbidden",
+        "workspace_mismatch",
+        "not_found",
+        "conflict",
+        "idempotency_conflict",
+        "unsupported_media_type",
+        "payload_too_large",
+        "parse_failed",
+        "embedding_failed",
+        "index_failed",
+        "retrieval_failed",
+        "rerank_failed",
+        "llm_rate_limited",
+        "llm_timeout",
+        "llm_unavailable",
+        "content_filtered",
+        "refused",
+        "stream_canceled",
+        "dependency_unavailable",
+        "internal_error"
+      ]
+    },
+    "ErrorDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "$ref": "#/$defs/ErrorCode" },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "面向开发者的可读描述，可包含上游错误摘要，不得包含密钥或用户隐私。"
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "调用方是否可以在退避后安全重试（幂等接口或 SSE 建流阶段）。"
+        },
+        "trace_id": {
+          "oneOf": [{ "$ref": "#/$defs/Uuid" }, { "type": "null" }],
+          "description": "贯穿网关与 AI 引擎的链路追踪 ID。"
+        },
+        "stage": {
+          "type": ["string", "null"],
+          "enum": [
+            "ingest",
+            "rewrite",
+            "vector",
+            "lexical",
+            "fusion",
+            "rerank",
+            "agent",
+            "generation",
+            "stream",
+            null
+          ],
+          "description": "错误发生时所在的流水线阶段；REST 场景可为 null。"
+        },
+        "details": {
+          "oneOf": [{ "$ref": "#/$defs/Metadata" }, { "type": "null" }],
+          "description": "结构化诊断信息（字段名、上游状态码、重试等待毫秒数等）。"
+        }
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "description": "全部内部 REST 接口的非 2xx 统一错误体。",
+      "additionalProperties": false,
+      "required": ["error"],
+      "properties": {
+        "error": { "$ref": "#/$defs/ErrorDetail" }
+      }
+    },
+    "IngestStage": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "fetching",
+        "parsing",
+        "chunking",
+        "embedding",
+        "indexing",
+        "completed",
+        "failed",
+        "canceled"
+      ]
+    },
+    "IngestStatus": {
+      "type": "string",
+      "enum": ["queued", "running", "succeeded", "failed", "canceled"]
+    },
+    "DocumentSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "uri"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["oss", "http", "local"],
+          "description": "oss=阿里云 OSS 对象；http=可下载 URL；local=引擎本地挂载路径（仅测试/内网）。"
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "对象 URI。oss 建议形如 oss://bucket/key；http 必须为 https 或内网 http。"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "maxLength": 1024 },
+          "maxProperties": 10,
+          "description": "下载所需请求头，例如 OSS 预签名场景不需要；临时鉴权头由网关注入。"
+        },
+        "expires_at": {
+          "oneOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }],
+          "description": "预签名 URL 过期时间；过期后任务将以 dependency_unavailable 失败。"
+        }
+      }
+    },
+    "ParsingOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ocr_enabled": { "type": "boolean", "default": true },
+        "ocr_languages": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 2, "maxLength": 8 },
+          "default": ["zh", "en"],
+          "maxItems": 4
+        },
+        "layout_analysis": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否进行版面分析（标题层级、双栏、表格、图片区域）。"
+        },
+        "extract_tables": { "type": "boolean", "default": true },
+        "table_format": { "type": "string", "enum": ["markdown", "html"], "default": "markdown" },
+        "ignore_header_footer": { "type": "boolean", "default": true },
+        "max_pages": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000,
+          "default": 500,
+          "description": "超出上限的文档直接拒绝，防止成本失控。"
+        }
+      }
+    },
+    "ChunkingConfig": {
+      "type": "object",
+      "description": "父子切片策略。父切片用于喂给 LLM 的完整上下文，子切片用于向量/BM25 检索与角标定位。",
+      "additionalProperties": false,
+      "required": ["strategy", "parent_chunk_size", "child_chunk_size"],
+      "properties": {
+        "strategy": { "type": "string", "enum": ["hierarchical", "semantic", "fixed"] },
+        "parent_chunk_size": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 8000,
+          "description": "父切片目标字符数，必须大于 child_chunk_size（由服务端校验）。"
+        },
+        "child_chunk_size": {
+          "type": "integer",
+          "minimum": 80,
+          "maximum": 2000,
+          "description": "子切片目标字符数。"
+        },
+        "child_overlap": { "type": "integer", "minimum": 0, "maximum": 500, "default": 80 },
+        "min_chunk_size": { "type": "integer", "minimum": 20, "maximum": 1000, "default": 80 },
+        "splitter": {
+          "type": "string",
+          "enum": ["auto", "markdown", "sentence", "fixed"],
+          "default": "auto"
+        },
+        "keep_table_intact": { "type": "boolean", "default": true }
+      }
+    },
+    "EmbeddingConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "dimensions"],
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "default": "text-embedding-v3",
+          "examples": ["text-embedding-v3", "bge-m3"]
+        },
+        "dimensions": {
+          "const": 1024,
+          "description": "v1 固定 1024 维，与 document_chunks.embedding vector(1024) 保持一致；更换维度需新增迁移与新表版本。"
+        },
+        "batch_size": { "type": "integer", "minimum": 1, "maximum": 64, "default": 16 },
+        "normalize": {
+          "type": "boolean",
+          "default": true,
+          "description": "写入前做 L2 归一化，配合余弦距离索引。"
+        }
+      }
+    },
+    "IngestCreateRequest": {
+      "type": "object",
+      "description": "POST /internal/v1/ingest/tasks 请求体。网关完成鉴权、配额校验后调用；引擎必须异步受理并在毫秒级返回 202。",
+      "additionalProperties": false,
+      "required": [
+        "workspace_id",
+        "knowledge_base_id",
+        "document_id",
+        "requested_by",
+        "idempotency_key",
+        "document",
+        "chunking",
+        "embedding"
+      ],
+      "properties": {
+        "workspace_id": { "$ref": "#/$defs/Uuid" },
+        "knowledge_base_id": { "$ref": "#/$defs/Uuid" },
+        "document_id": { "$ref": "#/$defs/Uuid" },
+        "requested_by": { "$ref": "#/$defs/Uuid" },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "description": "同一 workspace 内唯一；重复提交返回同一 task_id 且 deduplicated=true。"
+        },
+        "document": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["title", "file_name", "mime_type", "size_bytes", "sha256", "source"],
+          "properties": {
+            "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+            "file_name": { "type": "string", "minLength": 1, "maxLength": 300 },
+            "mime_type": { "type": "string", "minLength": 3, "maxLength": 150 },
+            "size_bytes": { "type": "integer", "minimum": 1, "maximum": 104857600 },
+            "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "language": { "type": "string", "minLength": 2, "maxLength": 16, "default": "zh" },
+            "source": { "$ref": "#/$defs/DocumentSource" }
+          }
+        },
+        "parse": { "$ref": "#/$defs/ParsingOptions" },
+        "chunking": { "$ref": "#/$defs/ChunkingConfig" },
+        "embedding": { "$ref": "#/$defs/EmbeddingConfig" },
+        "callback_url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "maxLength": 2048,
+          "description": "任务终态回调地址（网关内部端点）；为 null 表示仅支持轮询。"
+        },
+        "metadata": { "$ref": "#/$defs/Metadata" }
+      }
+    },
+    "IngestCreateResponse": {
+      "type": "object",
+      "description": "202 Accepted 响应。",
+      "additionalProperties": false,
+      "required": ["task_id", "document_id", "status", "accepted_at"],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/Uuid" },
+        "document_id": { "$ref": "#/$defs/Uuid" },
+        "status": { "const": "queued" },
+        "accepted_at": { "$ref": "#/$defs/Timestamp" },
+        "deduplicated": { "type": "boolean", "default": false },
+        "estimated_pages": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "StageTiming": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "latency_ms"],
+      "properties": {
+        "stage": { "$ref": "#/$defs/IngestStage" },
+        "started_at": { "$ref": "#/$defs/Timestamp" },
+        "finished_at": { "$ref": "#/$defs/Timestamp" },
+        "latency_ms": { "type": "number", "minimum": 0 }
+      }
+    },
+    "IngestCounters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pages": { "type": "integer", "minimum": 0, "default": 0 },
+        "parent_chunks": { "type": "integer", "minimum": 0, "default": 0 },
+        "child_chunks": { "type": "integer", "minimum": 0, "default": 0 },
+        "embedding_tokens": { "type": "integer", "minimum": 0, "default": 0 },
+        "ocr_pages": { "type": "integer", "minimum": 0, "default": 0 }
+      }
+    },
+    "IngestTaskStatus": {
+      "type": "object",
+      "description": "GET /internal/v1/ingest/tasks/{task_id} 响应；同一结构也作为回调载荷内嵌。",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "document_id",
+        "workspace_id",
+        "knowledge_base_id",
+        "status",
+        "stage",
+        "progress",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/Uuid" },
+        "document_id": { "$ref": "#/$defs/Uuid" },
+        "workspace_id": { "$ref": "#/$defs/Uuid" },
+        "knowledge_base_id": { "$ref": "#/$defs/Uuid" },
+        "status": { "$ref": "#/$defs/IngestStatus" },
+        "stage": { "$ref": "#/$defs/IngestStage" },
+        "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "attempt": { "type": "integer", "minimum": 1, "default": 1 },
+        "counters": { "$ref": "#/$defs/IngestCounters" },
+        "stage_timings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/StageTiming" },
+          "maxItems": 16
+        },
+        "error": {
+          "oneOf": [{ "$ref": "#/$defs/ErrorDetail" }, { "type": "null" }]
+        },
+        "created_at": { "$ref": "#/$defs/Timestamp" },
+        "updated_at": { "$ref": "#/$defs/Timestamp" },
+        "started_at": {
+          "oneOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }]
+        },
+        "finished_at": {
+          "oneOf": [{ "$ref": "#/$defs/Timestamp" }, { "type": "null" }]
+        }
+      }
+    },
+    "IngestCallback": {
+      "type": "object",
+      "description": "引擎 → 网关的任务终态回调（POST /internal/v1/ingest/callbacks）。请求头必须带 X-Internal-Signature: sha256=<hex(HMAC-SHA256(body))>。",
+      "additionalProperties": false,
+      "required": ["event", "occurred_at", "task"],
+      "properties": {
+        "event": {
+          "type": "string",
+          "enum": ["ingest.succeeded", "ingest.failed"]
+        },
+        "occurred_at": { "$ref": "#/$defs/Timestamp" },
+        "task": { "$ref": "#/$defs/IngestTaskStatus" }
+      }
+    },
+    "FusionConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": { "const": "rrf" },
+        "rrf_k": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 60 }
+      }
+    },
+    "RewriteConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "model": { "type": "string", "minLength": 1, "maxLength": 100, "default": "qwen-turbo" },
+        "max_variants": { "type": "integer", "minimum": 1, "maximum": 3, "default": 1 }
+      }
+    },
+    "RetrievalFilters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "document_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Uuid" },
+          "maxItems": 100
+        },
+        "chunk_types": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["text", "table", "image_caption", "code", "heading"] },
+          "maxItems": 5
+        },
+        "created_after": { "$ref": "#/$defs/Timestamp" },
+        "metadata": { "$ref": "#/$defs/Metadata" }
+      }
+    },
+    "RetrievalConfig": {
+      "type": "object",
+      "description": "混合检索与重排参数；未提供的字段使用服务端默认值。",
+      "additionalProperties": false,
+      "properties": {
+        "top_k": { "type": "integer", "minimum": 1, "maximum": 50, "default": 8 },
+        "vector_top_k": { "type": "integer", "minimum": 1, "maximum": 200, "default": 40 },
+        "lexical_top_k": { "type": "integer", "minimum": 1, "maximum": 200, "default": 40 },
+        "vector_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.65 },
+        "lexical_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.35 },
+        "min_vector_score": { "type": "number", "default": 0 },
+        "min_rerank_score": {
+          "type": "number",
+          "default": 0.2,
+          "description": "精排后低于该阈值的切片不进入上下文，用于抑制幻觉。"
+        },
+        "enable_rerank": { "type": "boolean", "default": true },
+        "rerank_model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "default": "bge-reranker-v2-m3"
+        },
+        "fusion": { "$ref": "#/$defs/FusionConfig" },
+        "rewrite": { "$ref": "#/$defs/RewriteConfig" },
+        "filters": { "$ref": "#/$defs/RetrievalFilters" }
+      }
+    },
+    "SearchCandidate": {
+      "type": "object",
+      "description": "检索漏斗中的一条候选切片，携带各阶段得分与排名变化；前端“检索透视抽屉”直接渲染该结构。",
+      "additionalProperties": false,
+      "required": ["chunk_id", "document_id", "document_title", "content_preview", "selected"],
+      "properties": {
+        "chunk_id": { "$ref": "#/$defs/Uuid" },
+        "parent_chunk_id": {
+          "oneOf": [{ "$ref": "#/$defs/Uuid" }, { "type": "null" }]
+        },
+        "document_id": { "$ref": "#/$defs/Uuid" },
+        "document_title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "file_name": { "type": "string", "maxLength": 300 },
+        "chunk_index": { "type": "integer", "minimum": 0 },
+        "chunk_type": {
+          "type": "string",
+          "enum": ["text", "table", "image_caption", "code", "heading"]
+        },
+        "section_path": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 200 },
+          "maxItems": 8,
+          "description": "标题层级路径，例如 [\"3 运维规范\", \"3.2 灰度发布\"]。"
+        },
+        "page_no": { "type": ["integer", "null"], "minimum": 1 },
+        "page_span": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "type": "integer", "minimum": 1 },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            { "type": "null" }
+          ]
+        },
+        "bbox": {
+          "oneOf": [{ "$ref": "#/$defs/BoundingBox" }, { "type": "null" }]
+        },
+        "char_start": { "type": ["integer", "null"], "minimum": 0 },
+        "char_end": { "type": ["integer", "null"], "minimum": 0 },
+        "content_preview": { "type": "string", "maxLength": 800 },
+        "token_count": { "type": ["integer", "null"], "minimum": 0 },
+        "vector_score": {
+          "type": ["number", "null"],
+          "description": "余弦相似度，[0,1] 区间（1 表示最相似）；未进入向量召回时为 null。"
+        },
+        "vector_rank": { "type": ["integer", "null"], "minimum": 1 },
+        "bm25_score": {
+          "type": ["number", "null"],
+          "description": "全文检索 BM25 得分，无统一上界；未进入关键词召回时为 null。"
+        },
+        "bm25_rank": { "type": ["integer", "null"], "minimum": 1 },
+        "rrf_score": {
+          "type": ["number", "null"],
+          "description": "RRF 融合得分，公式 sum(weight / (rrf_k + rank))。"
+        },
+        "fused_rank": { "type": ["integer", "null"], "minimum": 1 },
+        "rerank_score": {
+          "type": ["number", "null"],
+          "description": "Rerank 模型相关性分数（归一化到 [0,1]）。"
+        },
+        "rerank_rank": { "type": ["integer", "null"], "minimum": 1 },
+        "rank_delta": {
+          "type": ["integer", "null"],
+          "description": "fused_rank - rerank_rank；正数表示精排后名次上升。"
+        },
+        "selected": {
+          "type": "boolean",
+          "description": "是否通过阈值并进入最终上下文。"
+        },
+        "citation_index": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "selected=true 时分配的角标编号，与答案中的 [n] 对应。"
+        }
+      }
+    },
+    "RetrievalStageStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vector", "lexical", "fusion", "rerank"],
+      "properties": {
+        "vector": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "dimensions", "metric", "top_k", "candidates", "latency_ms"],
+          "properties": {
+            "model": { "type": "string" },
+            "dimensions": { "type": "integer", "minimum": 1 },
+            "metric": { "type": "string", "enum": ["cosine", "l2", "inner_product"] },
+            "top_k": { "type": "integer", "minimum": 1 },
+            "candidates": { "type": "integer", "minimum": 0 },
+            "latency_ms": { "type": "number", "minimum": 0 }
+          }
+        },
+        "lexical": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scorer", "top_k", "candidates", "latency_ms"],
+          "properties": {
+            "scorer": { "type": "string", "enum": ["bm25", "ts_rank_cd"] },
+            "config": {
+              "type": "string",
+              "description": "PostgreSQL 文本检索配置名，例如 simple / zh（zhparser）。"
+            },
+            "top_k": { "type": "integer", "minimum": 1 },
+            "candidates": { "type": "integer", "minimum": 0 },
+            "latency_ms": { "type": "number", "minimum": 0 }
+          }
+        },
+        "fusion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "rrf_k", "candidates", "latency_ms"],
+          "properties": {
+            "algorithm": { "const": "rrf" },
+            "rrf_k": { "type": "integer", "minimum": 1 },
+            "candidates": { "type": "integer", "minimum": 0 },
+            "latency_ms": { "type": "number", "minimum": 0 }
+          }
+        },
+        "rerank": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "candidates", "passed", "latency_ms"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "model": { "type": ["string", "null"] },
+            "top_k": { "type": "integer", "minimum": 1 },
+            "score_threshold": { "type": "number" },
+            "candidates": { "type": "integer", "minimum": 0 },
+            "passed": { "type": "integer", "minimum": 0 },
+            "latency_ms": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "RetrievalDiagnostics": {
+      "type": "object",
+      "description": "完整检索漏斗诊断数据：改写后的 Query、各阶段延迟、每条候选的向量/BM25/Rerank 得分与排名变化、原文页码与坐标。",
+      "additionalProperties": false,
+      "required": ["trace_id", "query", "config", "stages", "candidates", "selected_count", "total_latency_ms"],
+      "properties": {
+        "trace_id": { "$ref": "#/$defs/Uuid" },
+        "query": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["original", "rewritten"],
+          "properties": {
+            "original": { "type": "string", "minLength": 1, "maxLength": 4000 },
+            "rewritten": { "type": "string", "minLength": 1, "maxLength": 4000 },
+            "rewrite_model": { "type": ["string", "null"] },
+            "rewrite_latency_ms": { "type": ["number", "null"], "minimum": 0 },
+            "language": { "type": "string", "maxLength": 16 }
+          }
+        },
+        "config": { "$ref": "#/$defs/RetrievalConfig" },
+        "stages": { "$ref": "#/$defs/RetrievalStageStats" },
+        "candidates": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SearchCandidate" },
+          "maxItems": 100,
+          "description": "最多 100 条：按 rerank_rank → fused_rank → vector_rank 优先级截断后的漏斗候选；各阶段总候选数见 stages。"
+        },
+        "selected_count": { "type": "integer", "minimum": 0 },
+        "total_latency_ms": { "type": "number", "minimum": 0 }
+      }
+    },
+    "RetrievalSearchRequest": {
+      "type": "object",
+      "description": "POST /internal/v1/retrieval/search：非流式检索，供网关管理后台与检索调试使用。",
+      "additionalProperties": false,
+      "required": ["workspace_id", "kb_ids", "query", "retrieval"],
+      "properties": {
+        "workspace_id": { "$ref": "#/$defs/Uuid" },
+        "kb_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Uuid" },
+          "minItems": 1,
+          "maxItems": 10
+        },
+        "query": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "retrieval": { "$ref": "#/$defs/RetrievalConfig" },
+        "request_id": { "$ref": "#/$defs/Uuid" }
+      }
+    },
+    "RetrievalSearchResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trace_id", "diagnostics"],
+      "properties": {
+        "trace_id": { "$ref": "#/$defs/Uuid" },
+        "diagnostics": { "$ref": "#/$defs/RetrievalDiagnostics" }
+      }
+    },
+    "AgentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "enum": ["ops_assistant"] },
+        "max_steps": { "type": "integer", "minimum": 1, "maximum": 30, "default": 12 },
+        "enable_tools": { "type": "boolean", "default": true },
+        "allowed_tools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{2,63}$"
+          },
+          "uniqueItems": true,
+          "maxItems": 16,
+          "default": ["search_knowledge_base", "analyze_service_logs", "query_service_status"]
+        },
+        "reviewer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "min_context_score": {
+              "type": "number",
+              "default": 0.25,
+              "description": "Reviewer 认为证据充分所需的最低上下文 Rerank 分数；低于该值直接拒答。"
+            },
+            "max_unsupported_claims": { "type": "integer", "minimum": 0, "maximum": 10, "default": 0 },
+            "refusal_message": {
+              "type": "string",
+              "maxLength": 500,
+              "default": "当前知识库中没有足够可靠的依据回答该问题，请补充相关文档或联系知识库管理员。"
+            }
+          }
+        },
+        "planner": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "max_plan_steps": { "type": "integer", "minimum": 1, "maximum": 10, "default": 6 }
+          }
+        }
+      }
+    },
+    "GenerationConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": { "type": "string", "minLength": 1, "maxLength": 100, "default": "qwen-plus" },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2, "default": 0.2 },
+        "top_p": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 },
+        "max_tokens": { "type": "integer", "minimum": 64, "maximum": 8192, "default": 2048 },
+        "stop": {
+          "type": "array",
+          "items": { "type": "string", "maxLength": 64 },
+          "maxItems": 4
+        },
+        "citation_style": { "type": "string", "enum": ["numeric", "footnote"], "default": "numeric" },
+        "response_format": { "type": "string", "enum": ["markdown", "text"], "default": "markdown" }
+      }
+    },
+    "ChatHistoryItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "content"],
+      "properties": {
+        "role": { "type": "string", "enum": ["user", "assistant"] },
+        "content": { "type": "string", "minLength": 1, "maxLength": 8000 }
+      }
+    },
+    "ChatStreamRequest": {
+      "type": "object",
+      "description": "POST /internal/v1/chat/stream 请求体；响应为 text/event-stream。",
+      "additionalProperties": false,
+      "required": [
+        "workspace_id",
+        "conversation_id",
+        "message_id",
+        "user_id",
+        "query",
+        "kb_ids"
+      ],
+      "properties": {
+        "workspace_id": { "$ref": "#/$defs/Uuid" },
+        "conversation_id": { "$ref": "#/$defs/Uuid" },
+        "message_id": {
+          "$ref": "#/$defs/Uuid",
+          "description": "由网关预生成并持久化，用于首包前断线重试的幂等去重。"
+        },
+        "user_id": { "$ref": "#/$defs/Uuid" },
+        "query": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "kb_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Uuid" },
+          "minItems": 1,
+          "maxItems": 10
+        },
+        "mode": { "type": "string", "enum": ["rag", "agent"], "default": "rag" },
+        "agent": { "$ref": "#/$defs/AgentConfig" },
+        "retrieval": { "$ref": "#/$defs/RetrievalConfig" },
+        "generation": { "$ref": "#/$defs/GenerationConfig" },
+        "history": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ChatHistoryItem" },
+          "maxItems": 20,
+          "description": "最近若干轮对话，按时间正序；引擎不负责持久化历史。"
+        },
+        "locale": { "type": "string", "minLength": 2, "maxLength": 16, "default": "zh-CN" },
+        "metadata": { "$ref": "#/$defs/Metadata" }
+      }
+    },
+    "Citation": {
+      "type": "object",
+      "description": "答案角标 [n] 的溯源信息，前端据此定位右侧预览并高亮。",
+      "additionalProperties": false,
+      "required": ["index", "chunk_id", "document_id", "document_title", "quote"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 1, "maximum": 99 },
+        "chunk_id": { "$ref": "#/$defs/Uuid" },
+        "parent_chunk_id": {
+          "oneOf": [{ "$ref": "#/$defs/Uuid" }, { "type": "null" }]
+        },
+        "document_id": { "$ref": "#/$defs/Uuid" },
+        "document_title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "page_no": { "type": ["integer", "null"], "minimum": 1 },
+        "bbox": {
+          "oneOf": [{ "$ref": "#/$defs/BoundingBox" }, { "type": "null" }]
+        },
+        "char_start": { "type": ["integer", "null"], "minimum": 0 },
+        "char_end": { "type": ["integer", "null"], "minimum": 0 },
+        "quote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "被引用的原文片段，用于悬浮预览与高亮校验。"
+        },
+        "rerank_score": { "type": ["number", "null"] }
+      }
+    },
+    "Usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt_tokens", "completion_tokens", "total_tokens", "model"],
+      "properties": {
+        "prompt_tokens": { "type": "integer", "minimum": 0 },
+        "completion_tokens": { "type": "integer", "minimum": 0 },
+        "total_tokens": { "type": "integer", "minimum": 0 },
+        "model": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "estimated_cost_cny": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "按模型价目表估算的人民币成本，用于后台成本看板。"
+        }
+      }
+    },
+    "Timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ttft_ms", "retrieval_ms", "rerank_ms", "generation_ms", "total_ms"],
+      "properties": {
+        "ttft_ms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "引擎侧首 Token 延迟：从收到请求到第一个 generating 事件写出。网关会另行统计端到端 TTFT。"
+        },
+        "retrieval_ms": { "type": "number", "minimum": 0 },
+        "rerank_ms": { "type": "number", "minimum": 0 },
+        "generation_ms": { "type": "number", "minimum": 0 },
+        "total_ms": { "type": "number", "minimum": 0 }
+      }
+    },
+    "AgentStepSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step_index", "node", "status"],
+      "properties": {
+        "step_index": { "type": "integer", "minimum": 0 },
+        "node": {
+          "type": "string",
+          "enum": ["planner", "rag_retrieve", "tools", "reviewer", "writer", "system"]
+        },
+        "status": { "type": "string", "enum": ["started", "succeeded", "failed", "skipped"] },
+        "title": { "type": "string", "maxLength": 200 },
+        "tool_name": { "type": ["string", "null"], "maxLength": 64 },
+        "latency_ms": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "PlanStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step_index", "action", "description"],
+      "properties": {
+        "step_index": { "type": "integer", "minimum": 0 },
+        "action": {
+          "type": "string",
+          "enum": ["retrieve", "tool", "review", "answer"]
+        },
+        "description": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "tool_name": { "type": ["string", "null"], "maxLength": 64 }
+      }
+    },
+    "ThinkingData": {
+      "type": "object",
+      "description": "多智能体节点级进度事件，覆盖 thinking 状态推送。",
+      "additionalProperties": false,
+      "required": ["node", "step_index", "status", "title"],
+      "properties": {
+        "node": {
+          "type": "string",
+          "enum": ["planner", "rag_retrieve", "tools", "reviewer", "writer", "system"]
+        },
+        "step_index": { "type": "integer", "minimum": 0 },
+        "step_id": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "enum": ["started", "succeeded", "failed", "skipped"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "detail": { "type": ["string", "null"], "maxLength": 2000 },
+        "started_at": { "$ref": "#/$defs/Timestamp" },
+        "latency_ms": { "type": ["number", "null"], "minimum": 0 },
+        "plan": {
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/PlanStep" },
+          "maxItems": 10
+        },
+        "attributes": {
+          "oneOf": [{ "$ref": "#/$defs/Metadata" }, { "type": "null" }],
+          "description": "节点自定义诊断（如 reviewer 的 passed / reason、planner 的 intent）。"
+        }
+      }
+    },
+    "ToolCallingData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["call_id", "tool_name", "arguments", "status"],
+      "properties": {
+        "call_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "node": {
+          "type": "string",
+          "enum": ["tools", "rag_retrieve"],
+          "default": "tools"
+        },
+        "tool_name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "arguments": {
+          "type": "object",
+          "additionalProperties": true,
+          "maxProperties": 20
+        },
+        "status": { "type": "string", "enum": ["started", "succeeded", "failed"] },
+        "result_summary": {
+          "type": ["string", "null"],
+          "maxLength": 1000,
+          "description": "给用户展示的工具执行摘要，避免暴露原始大段日志。"
+        },
+        "result": {
+          "oneOf": [{ "$ref": "#/$defs/Metadata" }, { "type": "null" }],
+          "description": "结构化工具结果（如命中数、耗时、状态码），用于前端折叠展示。"
+        },
+        "latency_ms": { "type": ["number", "null"], "minimum": 0 },
+        "error": {
+          "oneOf": [{ "$ref": "#/$defs/ErrorDetail" }, { "type": "null" }]
+        }
+      }
+    },
+    "RerankingData": {
+      "type": "object",
+      "description": "重排阶段状态事件；逐条候选得分见随后的 retrieval 事件。",
+      "additionalProperties": false,
+      "required": ["status", "candidate_count", "top_n"],
+      "properties": {
+        "node": { "type": "string", "enum": ["rag_retrieve", "tools"], "default": "rag_retrieve" },
+        "status": { "type": "string", "enum": ["started", "succeeded", "failed", "skipped"] },
+        "model": { "type": ["string", "null"], "maxLength": 100 },
+        "candidate_count": { "type": "integer", "minimum": 0 },
+        "top_n": { "type": "integer", "minimum": 1 },
+        "score_threshold": { "type": "number" },
+        "passed_count": { "type": ["integer", "null"], "minimum": 0 },
+        "latency_ms": { "type": ["number", "null"], "minimum": 0 },
+        "error": {
+          "oneOf": [{ "$ref": "#/$defs/ErrorDetail" }, { "type": "null" }]
+        }
+      }
+    },
+    "RetrievalData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_id", "diagnostics"],
+      "properties": {
+        "message_id": { "$ref": "#/$defs/Uuid" },
+        "diagnostics": { "$ref": "#/$defs/RetrievalDiagnostics" }
+      }
+    },
+    "GeneratingData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_id", "delta", "index"],
+      "properties": {
+        "message_id": { "$ref": "#/$defs/Uuid" },
+        "delta": { "type": "string", "maxLength": 8000 },
+        "reasoning_delta": {
+          "type": ["string", "null"],
+          "maxLength": 4000,
+          "description": "模型思考片段；仅当网关允许透出 reasoning 时携带。"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "增量序号，从 0 单调递增，用于前端乱序检测与断线续传去重。"
+        },
+        "tokens_so_far": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "CitationData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_id", "citation"],
+      "properties": {
+        "message_id": { "$ref": "#/$defs/Uuid" },
+        "citation": { "$ref": "#/$defs/Citation" }
+      }
+    },
+    "UsageData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_id", "usage"],
+      "properties": {
+        "message_id": { "$ref": "#/$defs/Uuid" },
+        "usage": { "$ref": "#/$defs/Usage" }
+      }
+    },
+    "ErrorData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error"],
+      "properties": {
+        "message_id": {
+          "oneOf": [{ "$ref": "#/$defs/Uuid" }, { "type": "null" }]
+        },
+        "error": { "$ref": "#/$defs/ErrorDetail" }
+      }
+    },
+    "DoneData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message_id", "finish_reason", "usage", "timings", "citations"],
+      "properties": {
+        "message_id": { "$ref": "#/$defs/Uuid" },
+        "trace_id": { "$ref": "#/$defs/Uuid" },
+        "finish_reason": {
+          "type": "string",
+          "enum": ["stop", "length", "refused", "error", "canceled"]
+        },
+        "usage": { "$ref": "#/$defs/Usage" },
+        "timings": { "$ref": "#/$defs/Timings" },
+        "citations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Citation" },
+          "maxItems": 99
+        },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AgentStepSummary" },
+          "maxItems": 32
+        },
+        "model": { "type": "string", "maxLength": 100 }
+      }
+    },
+    "MetaData": {
+      "type": "object",
+      "description": "SSE 首个事件，声明本次流的路由与版本，便于网关校验与前端初始化。",
+      "additionalProperties": false,
+      "required": [
+        "message_id",
+        "conversation_id",
+        "trace_id",
+        "workspace_id",
+        "mode",
+        "model",
+        "contract_version",
+        "server_time"
+      ],
+      "properties": {
+        "message_id": { "$ref": "#/$defs/Uuid" },
+        "conversation_id": { "$ref": "#/$defs/Uuid" },
+        "trace_id": { "$ref": "#/$defs/Uuid" },
+        "workspace_id": { "$ref": "#/$defs/Uuid" },
+        "mode": { "type": "string", "enum": ["rag", "agent"] },
+        "agent_name": { "type": ["string", "null"], "maxLength": 64 },
+        "model": { "type": "string", "maxLength": 100 },
+        "contract_version": { "const": "1.0.0" },
+        "server_time": { "$ref": "#/$defs/Timestamp" }
+      }
+    },
+    "SseEventId": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "SSE id 字段，单条流内单调递增，用于断线续传回放。"
+    },
+    "MetaEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "data"],
+      "properties": {
+        "event": { "const": "meta" },
+        "id": { "$ref": "#/$defs/SseEventId" },
+        "data": { "$ref": "#/$defs/MetaData" }
+      }
+    },
+    "ThinkingEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "data"],
+      "properties": {
+        "event": { "const": "thinking" },
+        "id": { "$ref": "#/$defs/SseEventId" },
+        "data": { "$ref": "#/$defs/ThinkingData" }
+      }
+    },
+    "ToolCallingEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "data"],
+      "properties": {
+        "event": { "const": "tool_calling" },
+        "id": { "$ref": "#/$defs/SseEventId" },
+        "data": { "$ref": "#/$defs/ToolCallingData" }
+      }
+    },
+    "RerankingEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "data"],
+      "properties": {
+        "event": { "const": "reranking" },
+        "id": { "$ref": "#/$defs/SseEventId" },
+        "data": { "$ref": "#/$defs/RerankingData" }
+      }
+    },
+    "RetrievalEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "data"],
+      "properties": {
+        "event": { "const": "retrieval" },
+        "id": { "$ref": "#/$defs/SseEventId" },
+        "data": { "$ref": "#/$defs/RetrievalData" }
+      }
+    },
+    "GeneratingEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "data"],
+      "properties": {
+        "event": { "const": "generating" },
+        "id": { "$ref": "#/$defs/SseEventId" },
+        "data": { "$ref": "#/$defs/GeneratingData" }
+      }
+    },
+    "CitationEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "data"],
+      "properties": {
+        "event": { "const": "citation" },
+        "id": { "$ref": "#/$defs/SseEventId" },
+        "data": { "$ref": "#/$defs/CitationData" }
+      }
+    },
+    "UsageEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "data"],
+      "properties": {
+        "event": { "const": "usage" },
+        "id": { "$ref": "#/$defs/SseEventId" },
+        "data": { "$ref": "#/$defs/UsageData" }
+      }
+    },
+    "ErrorEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "data"],
+      "properties": {
+        "event": { "const": "error" },
+        "id": { "$ref": "#/$defs/SseEventId" },
+        "data": { "$ref": "#/$defs/ErrorData" }
+      }
+    },
+    "DoneEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "data"],
+      "properties": {
+        "event": { "const": "done" },
+        "id": { "$ref": "#/$defs/SseEventId" },
+        "data": { "$ref": "#/$defs/DoneData" }
+      }
+    },
+    "SseEvent": {
+      "description": "SSE data: 行的 JSON 消息体全集的联合类型。",
+      "oneOf": [
+        { "$ref": "#/$defs/MetaEvent" },
+        { "$ref": "#/$defs/ThinkingEvent" },
+        { "$ref": "#/$defs/ToolCallingEvent" },
+        { "$ref": "#/$defs/RerankingEvent" },
+        { "$ref": "#/$defs/RetrievalEvent" },
+        { "$ref": "#/$defs/GeneratingEvent" },
+        { "$ref": "#/$defs/CitationEvent" },
+        { "$ref": "#/$defs/UsageEvent" },
+        { "$ref": "#/$defs/ErrorEvent" },
+        { "$ref": "#/$defs/DoneEvent" }
+      ]
+    },
+    "HealthCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "degraded", "down"] },
+        "latency_ms": { "type": ["number", "null"], "minimum": 0 },
+        "message": { "type": ["string", "null"], "maxLength": 500 }
+      }
+    },
+    "HealthResponse": {
+      "type": "object",
+      "description": "GET /internal/v1/health 响应；网关将其聚合到自身健康检查。",
+      "additionalProperties": false,
+      "required": ["status", "service", "version", "contract_version", "server_time", "uptime_seconds", "checks"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ok", "degraded", "down"] },
+        "service": { "const": "ai-engine-py" },
+        "version": { "type": "string", "maxLength": 32 },
+        "contract_version": { "const": "1.0.0" },
+        "server_time": { "$ref": "#/$defs/Timestamp" },
+        "uptime_seconds": { "type": "number", "minimum": 0 },
+        "checks": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/HealthCheck" },
+          "required": ["postgres", "llm", "embedding"]
+        }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/IngestCreateRequest" },
+    { "$ref": "#/$defs/IngestCreateResponse" },
+    { "$ref": "#/$defs/IngestTaskStatus" },
+    { "$ref": "#/$defs/IngestCallback" },
+    { "$ref": "#/$defs/RetrievalSearchRequest" },
+    { "$ref": "#/$defs/RetrievalSearchResponse" },
+    { "$ref": "#/$defs/ChatStreamRequest" },
+    { "$ref": "#/$defs/MetaEvent" },
+    { "$ref": "#/$defs/ThinkingEvent" },
+    { "$ref": "#/$defs/ToolCallingEvent" },
+    { "$ref": "#/$defs/RerankingEvent" },
+    { "$ref": "#/$defs/RetrievalEvent" },
+    { "$ref": "#/$defs/GeneratingEvent" },
+    { "$ref": "#/$defs/CitationEvent" },
+    { "$ref": "#/$defs/UsageEvent" },
+    { "$ref": "#/$defs/ErrorEvent" },
+    { "$ref": "#/$defs/DoneEvent" },
+    { "$ref": "#/$defs/ErrorResponse" },
+    { "$ref": "#/$defs/HealthResponse" }
+  ]
+}

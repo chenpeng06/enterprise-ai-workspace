@@ -1,0 +1,11 @@
+{
+  "event": "generating",
+  "id": 14,
+  "data": {
+    "message_id": "0192f0a1-0002-7c2d-8e3f-0a1b2c3d4e5f",
+    "delta": "根据《研发运维规范 v2.3》，灰度批次错误率连续 5 分钟超过 1% 时，发布平台会自动回滚[1]。",
+    "reasoning_delta": null,
+    "index": 0,
+    "tokens_so_far": 38
+  }
+}

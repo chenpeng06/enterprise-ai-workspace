@@ -1,0 +1,59 @@
+{
+  "workspace_id": "0192f0a0-7c1e-7a3b-9f2d-1a2b3c4d5e6f",
+  "conversation_id": "0192f0a1-0001-7c2d-8e3f-0a1b2c3d4e5f",
+  "message_id": "0192f0a1-0002-7c2d-8e3f-0a1b2c3d4e5f",
+  "user_id": "0192f0a1-0003-7c2d-8e3f-0a1b2c3d4e5f",
+  "query": "灰度发布时如果新版本错误率超过阈值，应该怎么处理？自动回滚的判定条件是什么？",
+  "kb_ids": ["0192f0a1-0004-7c2d-8e3f-0a1b2c3d4e5f"],
+  "mode": "agent",
+  "agent": {
+    "name": "ops_assistant",
+    "max_steps": 12,
+    "enable_tools": true,
+    "allowed_tools": ["search_knowledge_base", "analyze_service_logs", "query_service_status"],
+    "reviewer": {
+      "enabled": true,
+      "min_context_score": 0.25,
+      "max_unsupported_claims": 0,
+      "refusal_message": "当前知识库中没有足够可靠的依据回答该问题，请补充相关文档或联系知识库管理员。"
+    },
+    "planner": { "enabled": true, "max_plan_steps": 6 }
+  },
+  "retrieval": {
+    "top_k": 8,
+    "vector_top_k": 40,
+    "lexical_top_k": 40,
+    "vector_weight": 0.65,
+    "lexical_weight": 0.35,
+    "min_vector_score": 0.0,
+    "min_rerank_score": 0.2,
+    "enable_rerank": true,
+    "rerank_model": "bge-reranker-v2-m3",
+    "fusion": { "algorithm": "rrf", "rrf_k": 60 },
+    "rewrite": { "enabled": true, "model": "qwen-turbo", "max_variants": 1 },
+    "filters": {
+      "document_ids": [],
+      "chunk_types": ["text", "table"]
+    }
+  },
+  "generation": {
+    "model": "qwen-plus",
+    "temperature": 0.2,
+    "top_p": 0.8,
+    "max_tokens": 2048,
+    "citation_style": "numeric",
+    "response_format": "markdown"
+  },
+  "history": [
+    {
+      "role": "user",
+      "content": "我们的灰度策略是 5% 流量，错误率阈值 1%。"
+    },
+    {
+      "role": "assistant",
+      "content": "已记录：灰度比例 5%，错误率阈值 1%。"
+    }
+  ],
+  "locale": "zh-CN",
+  "metadata": { "client": "web", "feature": "agent_hub", "experiment": "phase1-contract" }
+}

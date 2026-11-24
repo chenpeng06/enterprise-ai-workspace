@@ -1,0 +1,75 @@
+name: enterprise-ai-workspace
+
+# Phase 1 仅编排本地基础设施；应用容器（frontend / gateway-go / ai-engine-py）
+# 的 Dockerfile 与完整编排在 Phase 4 交付。这样 Phase 1 的脚手架可以立即联调数据库。
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: eaw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-workspace}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-workspace}
+      POSTGRES_DB: ${POSTGRES_DB:-workspace}
+      TZ: Asia/Shanghai
+      PGTZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # 首次初始化（数据卷为空）时自动执行完整建表脚本。
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    command:
+      - postgres
+      - -c
+      - max_connections=100
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - maintenance_work_mem=256MB
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-workspace} -d ${POSTGRES_DB:-workspace}
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - backend
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: eaw-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+    name: eaw-postgres-data
+  redis_data:
+    name: eaw-redis-data
+
+networks:
+  backend:
+    name: eaw-backend
+    driver: bridge

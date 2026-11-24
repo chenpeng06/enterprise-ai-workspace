@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-engine-py"
+version = "0.1.0"
+description = "企业级智能知识库 · RAG 与数字员工 AI 引擎（FastAPI + LangGraph）"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "Enterprise AI Workspace" }]
+dependencies = [
+  "fastapi>=0.115.6,<1.0",
+  "uvicorn[standard]>=0.34.0,<1.0",
+  "pydantic>=2.10.4,<3.0",
+  "pydantic-settings>=2.7.0,<3.0",
+  "sqlalchemy[asyncio]>=2.0.36,<3.0",
+  "asyncpg>=0.30.0,<1.0",
+  "pgvector>=0.3.6,<1.0",
+  "langgraph>=0.2.62,<1.0",
+  "langchain-core>=0.3.28,<1.0",
+  "httpx>=0.28.1,<1.0",
+  "tenacity>=9.0.0,<10.0",
+  "jsonschema>=4.23.0,<5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.4,<9.0",
+  "pytest-asyncio>=0.25.0,<1.0",
+  "httpx>=0.28.1,<1.0",
+  "ruff>=0.8.4,<1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+# 中文注释/文案中的全角标点不应被视为“易混淆字符”。
+ignore = ["B008", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.format]
+quote-style = "double"

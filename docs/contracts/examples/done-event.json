@@ -1,0 +1,72 @@
+{
+  "event": "done",
+  "id": 16,
+  "data": {
+    "message_id": "0192f0a1-0002-7c2d-8e3f-0a1b2c3d4e5f",
+    "trace_id": "0192f0a1-0008-7c2d-8e3f-0a1b2c3d4e5f",
+    "finish_reason": "stop",
+    "usage": {
+      "prompt_tokens": 2864,
+      "completion_tokens": 612,
+      "total_tokens": 3476,
+      "model": "qwen-plus",
+      "estimated_cost_cny": 0.0104
+    },
+    "timings": {
+      "ttft_ms": 1187.4,
+      "retrieval_ms": 682.9,
+      "rerank_ms": 412.4,
+      "generation_ms": 3611.8,
+      "total_ms": 4820.6
+    },
+    "citations": [
+      {
+        "index": 1,
+        "chunk_id": "0192f0a1-0006-7c2d-8e3f-0a1b2c3d4e5f",
+        "parent_chunk_id": "0192f0a1-0007-7c2d-8e3f-0a1b2c3d4e5f",
+        "document_id": "0192f0a1-0005-7c2d-8e3f-0a1b2c3d4e5f",
+        "document_title": "研发运维规范 v2.3",
+        "page_no": 18,
+        "bbox": { "x0": 0.128, "y0": 0.412, "x1": 0.871, "y1": 0.567 },
+        "char_start": 320,
+        "char_end": 598,
+        "quote": "灰度批次内新版本错误率连续 5 分钟超过 1%，或 P99 延迟超过基线 50%，由发布平台自动触发回滚。",
+        "rerank_score": 0.9412
+      },
+      {
+        "index": 2,
+        "chunk_id": "0192f0a1-000a-7c2d-8e3f-0a1b2c3d4e5f",
+        "parent_chunk_id": "0192f0a1-0007-7c2d-8e3f-0a1b2c3d4e5f",
+        "document_id": "0192f0a1-0005-7c2d-8e3f-0a1b2c3d4e5f",
+        "document_title": "研发运维规范 v2.3",
+        "page_no": 18,
+        "bbox": { "x0": 0.131, "y0": 0.581, "x1": 0.869, "y1": 0.704 },
+        "char_start": 610,
+        "char_end": 902,
+        "quote": "回滚执行后应保留现场：冻结该批次、导出发布单与指标快照，并在 15 分钟内通知值班 SRE 与业务负责人。",
+        "rerank_score": 0.8974
+      },
+      {
+        "index": 3,
+        "chunk_id": "0192f0a1-000b-7c2d-8e3f-0a1b2c3d4e5f",
+        "parent_chunk_id": null,
+        "document_id": "0192f0a1-0005-7c2d-8e3f-0a1b2c3d4e5f",
+        "document_title": "研发运维规范 v2.3",
+        "page_no": 17,
+        "bbox": { "x0": 0.102, "y0": 0.223, "x1": 0.902, "y1": 0.488 },
+        "char_start": 88,
+        "char_end": 420,
+        "quote": "错误率连续 5 分钟 > 1% 自动回滚；P99 延迟连续 5 分钟 > 基线 50% 自动回滚。",
+        "rerank_score": 0.4312
+      }
+    ],
+    "steps": [
+      { "step_index": 0, "node": "planner", "status": "succeeded", "title": "任务拆解", "tool_name": null, "latency_ms": 842.6 },
+      { "step_index": 1, "node": "rag_retrieve", "status": "succeeded", "title": "混合检索与重排", "tool_name": "search_knowledge_base", "latency_ms": 682.9 },
+      { "step_index": 2, "node": "tools", "status": "succeeded", "title": "灰度日志分析", "tool_name": "analyze_service_logs", "latency_ms": 1284.2 },
+      { "step_index": 3, "node": "reviewer", "status": "succeeded", "title": "证据充分性核查", "tool_name": null, "latency_ms": 311.7 },
+      { "step_index": 4, "node": "writer", "status": "succeeded", "title": "生成结构化报告", "tool_name": null, "latency_ms": 3611.8 }
+    ],
+    "model": "qwen-plus"
+  }
+}

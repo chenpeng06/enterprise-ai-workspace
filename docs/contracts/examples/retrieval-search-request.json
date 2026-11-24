@@ -1,0 +1,14 @@
+{
+  "workspace_id": "0192f0a0-7c1e-7a3b-9f2d-1a2b3c4d5e6f",
+  "kb_ids": ["0192f0a1-0004-7c2d-8e3f-0a1b2c3d4e5f"],
+  "query": "灰度发布自动回滚的判定条件",
+  "retrieval": {
+    "top_k": 5,
+    "vector_top_k": 40,
+    "lexical_top_k": 40,
+    "enable_rerank": true,
+    "min_rerank_score": 0.2,
+    "fusion": { "algorithm": "rrf", "rrf_k": 60 }
+  },
+  "request_id": "0192f0a1-000e-7c2d-8e3f-0a1b2c3d4e5f"
+}
