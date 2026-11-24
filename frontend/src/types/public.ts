@@ -21,6 +21,7 @@ export interface PublicChatRequest {
   query: string;
   kb_ids?: UUID[];
   mode?: "rag" | "agent";
+  agent_type_id?: UUID;
   retrieval?: RetrievalConfig;
   history?: PublicChatHistoryItem[];
 }

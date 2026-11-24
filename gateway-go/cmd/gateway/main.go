@@ -12,6 +12,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/enterprise-ai-workspace/gateway-go/internal/auth"
 	"github.com/enterprise-ai-workspace/gateway-go/internal/cache"
 	"github.com/enterprise-ai-workspace/gateway-go/internal/client/aiengine"
 	"github.com/enterprise-ai-workspace/gateway-go/internal/config"
@@ -53,6 +54,10 @@ func run() error {
 		return err
 	}
 	defer postgres.Close()
+
+	if err := auth.EnsureDemoAccounts(ctx, cfg, postgres); err != nil {
+		return fmt.Errorf("初始化演示账号失败: %w", err)
+	}
 
 	redisClient, err := cache.NewRedis(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
 	if err != nil {

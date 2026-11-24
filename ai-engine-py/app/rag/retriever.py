@@ -254,9 +254,7 @@ class HybridRetriever:
                 rerank_enabled = False
                 rerank_error = f"{type(exc).__name__}: {exc}"
                 logger.warning("Rerank 失败，降级为 RRF 排序: %s", exc)
-        rerank_ms = (
-            (time.perf_counter() - rerank_started) * 1000 if rerank_attempted else 0.0
-        )
+        rerank_ms = (time.perf_counter() - rerank_started) * 1000 if rerank_attempted else 0.0
         actual_rerank_model = (
             str(getattr(self.reranker, "model", "") or cfg.rerank_model)
             if rerank_attempted
@@ -715,8 +713,7 @@ class HybridRetriever:
             pool = [
                 item
                 for item in candidates
-                if item.vector_score is None
-                or item.vector_score >= config.min_vector_score
+                if item.vector_score is None or item.vector_score >= config.min_vector_score
             ]
             selected = sorted(
                 pool,

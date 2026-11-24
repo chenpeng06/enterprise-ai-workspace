@@ -3,20 +3,21 @@
 项目入口与治理层：鉴权、租户上下文、Redis 分布式限流、业务 CRUD、SSE 流式代理、
 TTFT / Token 统计与审计。**不包含**任何 RAG、文档解析或 Agent 编排逻辑。
 
-## Phase 1/3 交付范围
+## Phase 1/4 交付范围
 
 - 可直接运行的 Gin 服务骨架：结构化日志、请求 ID、优雅停机；
 - 配置加载与 fail-fast 校验（`.env` + 环境变量）；
 - PostgreSQL（pgx）与 Redis（go-redis）客户端；
 - `/healthz`、`/readyz`、`/version` 健康探针，`/readyz` 并发探测
   PostgreSQL / Redis / AI 引擎，并校验契约版本 `1.0.0`；
-- Redis Lua 分布式令牌桶（workspace + route + user/IP），429 + `Retry-After`，
-  限流事件异步写 `rate_limit_events`；
+- 本地邮箱密码登录、Redis HttpOnly 会话、RBAC（owner/admin/editor/viewer）；
+- 用户/角色/重置密码管理，受控管理员不能任命 admin/owner；
+- 游客每日检索配额（Redis Lua，原子计数）；
+- Redis Lua 分布式令牌桶（workspace + route + user/IP），429 + `Retry-After`；
 - `/api/v1/chat/stream` SSE 代理：逐行透传、旁路解析 TTFT/Token/引用/检索诊断，
   流结束后异步写 `messages`、`message_citations`、`retrieval_traces`、`request_logs`；
-- `/api/v1/chunks/{id}` 原文预览、`/api/v1/admin/metrics` 监控聚合；
-- 与 `docs/contracts/ai-engine-internal-v1.schema.json` 对齐的事件常量与
-  `done` / `usage` / `citation` 消息类型。
+- `/api/v1/documents` PDF 上传，`/api/v1/admin/agent-types` 数字员工类型；
+- `/api/v1/chunks/{id}` 原文预览、`/api/v1/admin/metrics` 监控聚合。
 
 ## 目录结构
 
@@ -74,14 +75,21 @@ go test ./...
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| POST | `/api/v1/auth/login` | 邮箱密码登录，建立 HttpOnly 会话 |
+| POST | `/api/v1/auth/logout` | 清除会话 |
+| GET | `/api/v1/auth/me` / `/auth/quota` | 当前身份 / 游客每日配额 |
 | GET | `/api/v1/bootstrap` | 演示租户与推荐问题 |
-| POST | `/api/v1/chat/stream` | SSE 对话；Redis 限流 + 指标落库 |
+| POST | `/api/v1/chat/stream` | SSE 对话；RBAC + 游客配额 + 令牌桶 |
 | GET | `/api/v1/chunks/{id}` | 文档切片预览（页码/bbox/quote） |
+| GET/POST | `/api/v1/documents` | 文档列表 / PDF 上传（owner/admin） |
+| GET | `/api/v1/admin/users` | 成员列表；POST/PATCH/DELETE 管理 |
+| GET/PUT | `/api/v1/admin/settings`、`/admin/settings/guest-quota` | 配额设置（PUT 仅 owner） |
+| GET/PUT | `/api/v1/admin/agent-types` | 数字员工类型 |
 | GET | `/api/v1/admin/metrics?hours=24` | 限流/TTFT/Token/命中率 |
 
-`POST /api/v1/chat/stream` 的请求体见 `docs/ARCHITECTURE.md` 第 6.7 节。
-网关在 SSE 转发过程中旁路解析 `generating` / `citation` / `retrieval` /
-`usage` / `done`，不会改变引擎事件顺序或字节内容。
+开发环境自动种子账号：`admin@demo.local/Admin@12345`（owner）、
+`ops@demo.local/Ops@12345`（admin）、`guest@demo.local/Guest@12345`（viewer）。
+生产必须设置 `SEED_DEMO_USERS=false`。
 
 ## 环境变量
 
@@ -94,10 +102,17 @@ go test ./...
 | `INTERNAL_TOKEN` | dev 默认值 | 内网共享密钥，生产必须替换 |
 | `DATABASE_URL` | 本地 workspace 库 | PostgreSQL 连接串 |
 | `REDIS_ADDR` | `127.0.0.1:6379` | Redis 地址 |
-| `DEV_WORKSPACE_ID` | 演示 workspace | Phase 3 本地演示租户 |
-| `DEV_KB_ID` | 演示知识库 | Phase 3 默认知识库 |
+| `DEV_WORKSPACE_ID` | 演示 workspace | Phase 3/4 本地演示租户 |
+| `DEV_KB_ID` | 演示知识库 | 默认知识库 |
 | `RATE_LIMIT_CAPACITY` | 20 | 令牌桶容量 |
 | `RATE_LIMIT_REFILL_PER_SECOND` | 0.5 | 每秒补充令牌数 |
+| `SEED_DEMO_USERS` | development 为 true | 生产必须 false |
+| `SESSION_TTL` | 12h | HttpOnly 会话 TTL |
+| `SESSION_COOKIE_SECURE` | false | 生产必须 true |
+| `DEMO_*_EMAIL/PASSWORD` | 本地演示账号 | 生产必须替换/删除 |
+| `GUEST_QUOTA_DEFAULT` | 20 | 游客每日默认配额 |
+| `UPLOAD_DIR` | `../.local/uploads` | 与引擎 `INGEST_LOCAL_ROOT` 一致 |
+| `UPLOAD_MAX_MB` | 50 | PDF 大小上限 |
 | `CORS_ORIGINS` | `http://127.0.0.1:5173` | 逗号分隔的前端来源 |
 
 完整列表见 `.env.example`。

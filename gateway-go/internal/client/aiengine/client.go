@@ -119,6 +119,33 @@ func (c *Client) OpenChatStream(
 	return response, nil
 }
 
+// CreateIngest 调用引擎异步摄取接口，返回原始状态码与响应体。
+func (c *Client) CreateIngest(ctx context.Context, payload []byte) (int, []byte, error) {
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL+"/internal/v1/ingest/tasks",
+		bytes.NewReader(payload),
+	)
+	if err != nil {
+		return 0, nil, fmt.Errorf("构造摄取请求失败: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("X-Internal-Token", c.token)
+
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return 0, nil, fmt.Errorf("请求 AI 引擎摄取接口失败: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxHealthBodyBytes))
+	if err != nil {
+		return response.StatusCode, nil, fmt.Errorf("读取摄取响应失败: %w", err)
+	}
+	return response.StatusCode, body, nil
+}
+
 func truncate(value string, limit int) string {
 	if len(value) <= limit {
 		return value

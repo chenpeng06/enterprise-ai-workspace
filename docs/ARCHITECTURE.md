@@ -2,11 +2,11 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 1.2.0 |
+| 文档版本 | 1.3.0 |
 | 内部契约版本 | **1.0.0** |
 | 更新日期 | 2026-11-24 |
-| 对应阶段 | Phase 1–3（底座/检索 Agent、Go 网关与前端工作台） |
-| 状态 | Phase 3 已实现，真实对话/限流/指标落库已验证；Phase 4 待继续 |
+| 对应阶段 | Phase 1–4（底座/检索 Agent、网关/前端、角色权限与 PDF 摄取） |
+| 状态 | Phase 4 权限/配额/数字员工类型/PDF 摄取已实现；CI/CD 与阿里云部署待执行 |
 
 > 本文档是 `gateway-go` 与 `ai-engine-py` 之间 REST / SSE 通信的**唯一契约说明**，
 > 同时给出 `PostgreSQL 16 + pgvector` 的完整建表设计。
@@ -156,24 +156,29 @@ enterprise-ai-workspace/
 │   └── src/
 │       ├── main.tsx / App.tsx / index.css
 │       ├── components/              # AppShell、StatusPanel
-│       ├── pages/                   # HomePage、ChatPage、AdminPage、NotFoundPage
+│       ├── pages/                   # Home/Login/Chat/Admin/Users/Agents/Documents/Settings
 │       ├── lib/                     # 公共 API、SSE 解析器、env、cn
-│       ├── types/                   # contract 镜像 + public API 类型
+│       ├── types/                   # contract 镜像 + public/auth 类型
 │       └── features/
+│           ├── auth/                # AuthProvider、路由守卫
 │           ├── chat/                # 对话、进度、角标联动、原文预览
 │           └── retrieval-inspector/ # 检索透视抽屉
 ├── gateway-go/                      # Go 1.23 + Gin
 │   ├── go.mod / go.sum / Makefile / .env.example
-│   ├── cmd/gateway/main.go          # 装配、优雅停机
+│   ├── cmd/gateway/main.go          # 装配、演示账号种子、优雅停机
 │   └── internal/
 │       ├── config/                  # env 解析与 fail-fast 校验
 │       ├── observability/           # slog 结构化日志
 │       ├── httpserver/              # 公共/健康路由、中间件
+│       ├── auth/                    # 本地登录、Redis 会话、RBAC
+│       ├── quota/                   # 游客每日配额
+│       ├── admin/                   # 用户/设置/数字员工类型 API
+│       ├── documents/               # PDF 上传入口
 │       ├── chatproxy/               # SSE 透传、旁路指标、请求落库
 │       ├── ratelimit/               # Redis Lua 令牌桶与 429 中间件
 │       ├── client/aiengine/         # 引擎内部 REST/SSE 客户端
 │       ├── contract/                # SSE 事件常量与 done/usage 结构
-│       ├── store/                   # pgx 连接池与 Phase 3 仓储
+│       ├── store/                   # pgx 连接池与业务仓储
 │       └── cache/                   # Redis 客户端
 ├── ai-engine-py/                    # Python 3.12+ + FastAPI + LangGraph
 │   ├── pyproject.toml / Makefile / .env.example
@@ -187,9 +192,9 @@ enterprise-ai-workspace/
 │   │   ├── rag/                     # retriever / embeddings / reranker / rewrite
 │   │   ├── agents/                  # ops_assistant.py（LangGraph）
 │   │   ├── tools/                   # 日志/状态工具（当前为模拟实现）
-│   │   └── services/                # LLM 客户端；摄取执行器待补齐
+│   │   └── services/                # LLM 客户端、ingest.py（PDF 摄取）
 │   ├── scripts/                     # check_models.py / seed_demo.py
-│   └── tests/                       # 契约、检索、Agent、API 测试
+│   └── tests/                       # 契约、检索、Agent、摄取、API 测试
 ├── deploy/
 │   ├── docker-compose.yml           # 本地 PostgreSQL/Redis
 │   ├── initdb/01_schema.sql         # 完整 DDL（唯一可执行来源）
@@ -481,9 +486,57 @@ X-RateLimit-Remaining: 0
 
 ### 6.8 内部 API 实现边界
 
-Phase 2/3 已实现 `POST /internal/v1/retrieval/search` 与
-`POST /internal/v1/chat/stream`；`/internal/v1/ingest/*` 仍按 Phase 1 契约预留，
-当前演示数据由 `ai-engine-py/scripts/seed_demo.py` 写入。
+Phase 2/3 已实现 `POST /internal/v1/retrieval/search`、`POST /internal/v1/chat/stream`；
+Phase 4 已实现 `POST /internal/v1/ingest/tasks` 与
+`GET /internal/v1/ingest/tasks/{task_id}`：网关上传 PDF 到共享目录后调用引擎，
+引擎异步完成 pypdf 解析、父子切片、百炼 Embedding 与 pgvector 写入。
+`POST /internal/v1/ingest/callbacks` 仍保留给后续 OSS/异步回调场景；当前本地
+实现通过 DB 状态与网关文档列表轮询展示进度。
+
+### 6.9 Phase 4 身份、RBAC 与内容运营
+
+浏览器身份由网关本地会话管理，AI 引擎不感知用户角色：
+
+- `users.password_hash` 使用 bcrypt；登录成功生成 256-bit token，
+  Redis `session:<token>` TTL 默认 12h；
+- Cookie：`eaw_session`、`HttpOnly`、`SameSite=Lax`、生产 `Secure`；
+- 每次请求从 Redis session + `users/workspace_members` 重新解析角色，角色变更立即生效；
+- 角色映射：`owner`=超级管理员、`admin`=受控管理员、`editor`=运营人员、
+  `viewer`=游客；
+- 权限边界：admin 只能管理 editor/viewer、上传文档、维护数字员工类型；只有 owner
+  能任命 admin、修改游客配额；游客只能只读使用并受每日配额限制；
+- 游客配额：`workspaces.settings.guest_daily_query_quota`（默认 20），Redis Lua
+  原子计数，按 Asia/Shanghai 自然日重置；
+- 数字员工类型：存于 `workspaces.settings.agent_types`，网关校验后通过
+  `ChatStreamRequest.metadata.agent_profile` 注入；引擎在 Writer/Planner/Tools
+  中使用类型专属 system prompt 与工具白名单，不修改已冻结契约 v1.0.0。
+
+Phase 4 公共接口（均要求会话，除登录/登出/bootstrap）：
+
+| 方法 | 路径 | 权限 |
+| --- | --- | --- |
+| `POST` | `/api/v1/auth/login` | 公开 |
+| `GET` | `/api/v1/auth/me`、`/auth/quota` | 登录 |
+| `GET/POST` | `/api/v1/admin/users` | owner/admin |
+| `PATCH/DELETE` | `/api/v1/admin/users/{id}` | owner/admin（admin 仅 editor/viewer） |
+| `GET` | `/api/v1/admin/settings` | owner/admin |
+| `PUT` | `/api/v1/admin/settings/guest-quota` | owner |
+| `GET/PUT` | `/api/v1/admin/agent-types` | owner/admin |
+| `GET` | `/api/v1/agent-types` | 登录（仅启用类型） |
+| `POST/GET` | `/api/v1/documents` | owner/admin 上传；登录用户查看列表 |
+
+PDF 摄取链路：
+
+```
+multipart PDF → 网关校验/落盘/SHA-256
+  → POST /internal/v1/ingest/tasks（local source）
+  → 引擎后台：pypdf → 父子切片 → Embedding(1024)
+  → documents / document_parent_chunks / document_chunks
+  → ingest_tasks stage/progress + documents.status=ready
+```
+
+本地文件目录由 `UPLOAD_DIR`（网关）与 `INGEST_LOCAL_ROOT`（引擎）指向同一路径；
+生产替换为 OSS 并增加临时签名 URL。扫描 PDF 的 OCR 尚未启用。
 
 ---
 
@@ -3102,8 +3155,8 @@ COMMIT;
 | 内部 API | `POST /retrieval/search`、`POST /chat/stream` 已实现 |
 | 真实验收 | DeepSeek `deepseek-flash` + 百炼 `text-embedding-v3`；372 条真实 SSE 事件逐条通过 Schema |
 
-**Phase 2 尚未覆盖**（按 TASKS 属于后续增强）：`/ingest/tasks` 的完整解析/切片/
-Embedding 执行器、回调网关与任务恢复；目前通过 `scripts/seed_demo.py` 写入演示数据。
+**Phase 2 尚未覆盖**：`/ingest/tasks` 已在 Phase 4 补齐本地 PDF 执行器；
+OSS/HTTP 源、回调网关、OCR 扫描件与任务恢复仍属于后续增强。
 
 ### 13.3 Phase 3
 
@@ -3119,12 +3172,25 @@ Embedding 执行器、回调网关与任务恢复；目前通过 `scripts/seed_d
 | Rerank 真实验收 | 百炼 `gte-rerank-v2`：3 候选约 250–340ms，按阈值保留真实达标片段 |
 | 真实链路验收 | 网关真实 SSE 对话 + 引用 + 检索留痕落库；限流 429 与看板聚合已验证 |
 
-**Phase 4 衔接点**：
+### 13.4 Phase 4（权限、运营与摄取）
+
+| 需求 | 实现 |
+| --- | --- |
+| 游客只读 / 超管全部 / 受控管理员 | `users` + `workspace_members` + bcrypt + Redis 会话；RBAC 权限矩阵 |
+| 受控管理员授权他人 | `/admin/users` 创建 guest/editor、改角色、重置密码；不能任命 admin/owner |
+| 超管设置游客检索数量 | `workspaces.settings.guest_daily_query_quota` + Redis 每日原子计数 |
+| 超管增加数字员工类型 | `workspaces.settings.agent_types` + `/admin/agent-types` + 引擎 prompt 注入 |
+| 上传 PDF 拆分检索 | 网关 multipart + 引擎 pypdf/父子切片/Embedding/pgvector + 文档状态 |
+| 管理 UI | 登录页、用户权限、数字员工、文档摄取、运营设置、指标看板 |
+| 验收 | Go/Python/前端测试；游客 3 次配额拒绝；PDF 2 页摄取 ready；自定义 Agent 对话生效 |
+| CI/CD + 阿里云 | 已记录方案（`docs/PHASE4_ACCESS_AND_DELIVERY.md` 第 6 节），未执行部署 |
+
+**部署衔接（TASKS Phase 4）**：
 
 - 为 `gateway-go`、`ai-engine-py`、`frontend` 增加生产 Dockerfile；
 - 将 Compose 扩展为网关/引擎/前端 + PostgreSQL/Redis 的完整本地编排；
 - 补齐阿里云 RDS/Redis/OSS/SAE/FC 部署、VPC 与月度成本核算；
-- 生产关闭 `DEV_WORKSPACE_ID` 演示租户，接入真实登录态与 workspace 鉴权。
+- 生产关闭 `SEED_DEMO_USERS`、`DEV_WORKSPACE_ID` 演示租户，替换默认密码并启用 Secure Cookie。
 
 ---
 
@@ -3176,11 +3242,16 @@ cd ai-engine-py && pytest -q && ruff check .
 - 当前已配置百炼 `gte-rerank-v2`：3 条候选精排耗时约 250–340ms，按
   `min_rerank_score` 过滤后只保留真实达标片段；Reranker 会校验
   `RERANK_BASE_URL` 必须是合法 http(s) 地址，非法配置直接关闭精排；
-- 公共 `/api/v1` 当前使用 `DEV_WORKSPACE_ID` 演示租户，生产必须替换为登录态与
-  workspace 鉴权；本机默认密钥仅供开发，生产启动校验会拒绝弱 Token。
+- 公共 `/api/v1` 已启用本地邮箱会话；开发环境自动种子 `admin@demo.local` /
+  `ops@demo.local` / `guest@demo.local`，生产必须设置 `SEED_DEMO_USERS=false`、
+  替换密码并开启 Secure Cookie；
+- PDF 摄取当前只支持 local 共享目录、pypdf 文本层；扫描件 OCR、OSS/HTTP 源、
+  回调投递与任务恢复尚未实现；本地默认上传目录 `.local/uploads`；
+- 本机默认 INTERNAL_TOKEN 仅供开发，生产启动校验会拒绝弱 Token。
 
 Phase 1 已在本机 Docker Desktop（PG 16.16 + pgvector 0.8.7）实际执行完整 DDL，
 并验证 HNSW 索引命中、BM25 函数、全文触发器与 14 条 RLS 策略。
 Phase 2 使用真实 DeepSeek + 百炼 Embedding 完成检索与 SSE 问答，所有事件通过
 JSON Schema 校验。Phase 3 已验证网关真实 SSE 透传、Redis 429、消息/引用/检索
-留痕/请求日志落库，以及前端角标联动和监控看板。
+留痕/请求日志落库，以及前端角标联动和监控看板。Phase 4 已验证三角色 RBAC、
+游客第 3 次配额拒绝、2 页 PDF 摄取 ready 与自定义数字员工对话。

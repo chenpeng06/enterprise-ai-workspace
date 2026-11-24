@@ -154,6 +154,10 @@ if (-not $enginePython) {
 }
 
 $gatewayDir = Join-Path $repo 'gateway-go'
+$uploadDir = Join-Path $repo '.local\uploads'
+New-Item -ItemType Directory -Path $uploadDir -Force | Out-Null
+$env:UPLOAD_DIR = $uploadDir
+$env:INGEST_LOCAL_ROOT = $uploadDir
 $go = Find-Executable -Candidates @('D:\tools\go\bin\go.exe') -FallbackName 'go'
 if (-not $go) {
     throw '找不到 Go 工具链。请参考 docs/LOCAL_SETUP.md。'

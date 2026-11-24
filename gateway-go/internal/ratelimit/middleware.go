@@ -39,11 +39,17 @@ func Middleware(
 	auditor Auditor,
 ) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		workspaceID := strings.TrimSpace(c.GetHeader("X-Workspace-Id"))
+		workspaceID := c.GetString("auth_workspace_id")
+		userID := c.GetString("auth_user_id")
+		if workspaceID == "" {
+			workspaceID = strings.TrimSpace(c.GetHeader("X-Workspace-Id"))
+		}
+		if userID == "" {
+			userID = strings.TrimSpace(c.GetHeader("X-User-Id"))
+		}
 		if workspaceID == "" {
 			workspaceID = cfg.DevWorkspaceID
 		}
-		userID := strings.TrimSpace(c.GetHeader("X-User-Id"))
 		identity := userID
 		if identity == "" {
 			identity = c.ClientIP()

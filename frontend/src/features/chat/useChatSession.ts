@@ -18,6 +18,7 @@ import type {
 interface UseChatSessionOptions {
   kbIds: string[];
   mode: "rag" | "agent";
+  agentTypeId?: string;
 }
 
 const NODE_LABELS: Record<string, string> = {
@@ -52,7 +53,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "对话请求失败";
 }
 
-export function useChatSession({ kbIds, mode }: UseChatSessionOptions) {
+export function useChatSession({ kbIds, mode, agentTypeId }: UseChatSessionOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [diagnostics, setDiagnostics] = useState<RetrievalDiagnostics | null>(null);
   const [streaming, setStreaming] = useState(false);
@@ -189,6 +190,7 @@ export function useChatSession({ kbIds, mode }: UseChatSessionOptions) {
             query,
             kb_ids: kbIds,
             mode,
+            agent_type_id: agentTypeId,
             history,
           },
           {
@@ -322,7 +324,7 @@ export function useChatSession({ kbIds, mode }: UseChatSessionOptions) {
         }
       }
     },
-    [clearTimer, flushDelta, kbIds, messages, mode, patchAssistant, scheduleFlush],
+    [clearTimer, flushDelta, kbIds, messages, mode, agentTypeId, patchAssistant, scheduleFlush],
   );
 
   const stop = useCallback(() => {

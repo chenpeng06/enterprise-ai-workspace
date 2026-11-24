@@ -147,6 +147,34 @@ Phase 3 页面：
 
 ![管理看板](assets/phase3-admin-dashboard.png)
 
+Phase 4 页面与账号：
+
+- 登录：`http://127.0.0.1:5173/login`
+- 用户权限：`/admin/users`；数字员工：`/admin/agents`；文档摄取：`/admin/documents`；运营设置：`/admin/settings`
+- 本地演示账号（`SEED_DEMO_USERS=true` 时自动创建）：
+
+| 邮箱 | 密码 | 角色 |
+| --- | --- | --- |
+| `admin@demo.local` | `Admin@12345` | 超级管理员 |
+| `ops@demo.local` | `Ops@12345` | 受控管理员 |
+| `guest@demo.local` | `Guest@12345` | 游客（默认 20 次/日） |
+
+- 上传目录：`start-all.ps1` 把 `.local/uploads` 同时注入 `UPLOAD_DIR` 与
+  `INGEST_LOCAL_ROOT`；网关写文件，引擎读取并异步解析。
+- PDF 摄取：`POST /api/v1/documents` → pypdf → 父子切片 → 百炼 Embedding → pgvector；
+  文档列表每 3 秒刷新状态，`ready` 后可立即检索。
+- 游客配额：超级管理员在 `/admin/settings` 修改；游客第 N+1 次对话返回 429。
+- 生产必须设置 `SEED_DEMO_USERS=false`、替换演示密码、启用
+  `SESSION_COOKIE_SECURE=true`。
+
+| 登录 | 游客配额对话 |
+| --- | --- |
+| ![登录](assets/phase4-login.png) | ![游客对话](assets/phase4-guest-chat.png) |
+
+| 用户权限 | 文档摄取 |
+| --- | --- |
+| ![用户权限](assets/phase4-users.png) | ![文档摄取](assets/phase4-documents.png) |
+
 本机实测通过的关键项：
 
 | 检查 | 结果 |
@@ -162,8 +190,8 @@ Phase 3 页面：
 ## 5. 配置
 
 - `deploy/.env`：PostgreSQL/Redis 本地凭据（由 `.env.example` 复制）；
-- `gateway-go/.env`：数据库、Redis、内部 Token、端口；
-- `ai-engine-py/.env`：数据库、内部 Token、LLM/Embedding/OSS 配置；
+- `gateway-go/.env`：数据库、Redis、内部 Token、演示账号、会话 Cookie、上传目录；
+- `ai-engine-py/.env`：数据库、内部 Token、LLM/Embedding/Rerank、`INGEST_LOCAL_ROOT`；
 - `frontend/.env.local`：API 基址与 Vite 代理目标。
 
 本地默认 Token 为 `dev-internal-token-change-me`，仅限本机。

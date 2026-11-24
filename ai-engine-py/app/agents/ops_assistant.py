@@ -181,6 +181,7 @@ class OpsAssistant:
     async def _planner_node(self, state: AgentState) -> dict[str, Any]:
         request = state["request"]
         agent_cfg = request.resolved_agent()
+        profile = self._agent_profile()
         started = time.perf_counter()
         started_at = _iso_now()
 
@@ -226,7 +227,10 @@ class OpsAssistant:
         try:
             payload, usage = await self.llm.chat_json(
                 [
-                    {"role": "system", "content": _PLANNER_SYSTEM_PROMPT},
+                    {
+                        "role": "system",
+                        "content": _PLANNER_SYSTEM_PROMPT + self._profile_system_suffix(profile),
+                    },
                     {"role": "user", "content": request.query},
                 ],
                 max_tokens=800,
@@ -492,7 +496,10 @@ class OpsAssistant:
             }
 
         service = self._service_from_query(request.query)
+        profile = self._agent_profile()
         allowed = set(agent_cfg.allowed_tools)
+        if profile and profile.get("allowed_tools"):
+            allowed &= set(profile["allowed_tools"])
         tool_results: list[dict[str, Any]] = []
         steps = list(state.get("steps", []))
 
@@ -775,6 +782,7 @@ class OpsAssistant:
 
     def _writer_messages(self, state: AgentState) -> list[dict[str, str]]:
         request = state["request"]
+        profile = self._agent_profile()
         retrieval = state.get("retrieval")
         selected = retrieval.selected if retrieval else []
         citations = state.get("citations") or []
@@ -797,11 +805,46 @@ class OpsAssistant:
 {tool_text}
 
 请输出 Markdown 结构化报告，结论与处置建议中的事实必须带 [n] 角标。"""
-        messages: list[dict[str, str]] = [{"role": "system", "content": _WRITER_SYSTEM_PROMPT}]
+        messages: list[dict[str, str]] = [
+            {
+                "role": "system",
+                "content": _WRITER_SYSTEM_PROMPT + self._profile_system_suffix(profile),
+            }
+        ]
         for item in request.history[-4:]:
             messages.append({"role": item.role, "content": item.content[:1000]})
         messages.append({"role": "user", "content": user_prompt})
         return messages
+
+    def _agent_profile(self) -> dict[str, Any] | None:
+        if self._request is None:
+            return None
+        raw = (self._request.metadata or {}).get("agent_profile")
+        if not isinstance(raw, dict):
+            return None
+        name = str(raw.get("name") or "").strip()
+        system_prompt = str(raw.get("system_prompt") or "").strip()
+        if not name or not system_prompt:
+            return None
+        tools = raw.get("allowed_tools")
+        return {
+            "id": str(raw.get("id") or ""),
+            "name": name[:64],
+            "description": str(raw.get("description") or "")[:300],
+            "system_prompt": system_prompt[:4000],
+            "allowed_tools": [str(item) for item in tools] if isinstance(tools, list) else [],
+        }
+
+    @staticmethod
+    def _profile_system_suffix(profile: dict[str, Any] | None) -> str:
+        if not profile:
+            return ""
+        return (
+            "\n\n【数字员工类型】\n"
+            f"名称：{profile['name']}\n"
+            f"职责：{profile.get('description') or '按企业知识库回答'}\n"
+            f"类型专属要求：{profile['system_prompt']}"
+        )
 
     @staticmethod
     def _normalize_plan(payload: dict[str, Any], max_steps: int) -> list[dict[str, Any]]:

@@ -5,15 +5,16 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-
+	"github.com/enterprise-ai-workspace/gateway-go/internal/auth"
 	"github.com/enterprise-ai-workspace/gateway-go/internal/client/aiengine"
 	"github.com/enterprise-ai-workspace/gateway-go/internal/config"
 	"github.com/enterprise-ai-workspace/gateway-go/internal/store"
@@ -42,10 +43,20 @@ type publicChatRequest struct {
 	Query          string          `json:"query"`
 	KBIDs          []string        `json:"kb_ids"`
 	Mode           string          `json:"mode"`
+	AgentTypeID    string          `json:"agent_type_id"`
 	Agent          json.RawMessage `json:"agent"`
 	Retrieval      json.RawMessage `json:"retrieval"`
 	Generation     json.RawMessage `json:"generation"`
 	History        json.RawMessage `json:"history"`
+}
+
+type agentProfile struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	SystemPrompt string   `json:"system_prompt"`
+	Mode         string   `json:"mode"`
+	AllowedTools []string `json:"allowed_tools"`
 }
 
 type streamRecord struct {
@@ -216,10 +227,12 @@ func (h *Handler) Stream(c *gin.Context) {
 	if !ok {
 		return
 	}
-	userID := strings.TrimSpace(c.GetHeader("X-User-Id"))
-	if _, err := uuid.Parse(userID); err != nil {
-		userID = uuid.NewString()
+	identity, ok := auth.IdentityFromContext(c)
+	if !ok {
+		h.writeError(c, http.StatusUnauthorized, "unauthorized", "请先登录", false)
+		return
 	}
+	userID := identity.UserID
 	conversationID := strings.TrimSpace(request.ConversationID)
 	if conversationID == "" {
 		conversationID = uuid.NewString()
@@ -282,6 +295,14 @@ func (h *Handler) Stream(c *gin.Context) {
 		"query":           request.Query,
 		"kb_ids":          kbIDs,
 		"mode":            mode,
+	}
+	profile, err := h.resolveAgentProfile(c.Request.Context(), workspaceID, request.AgentTypeID)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "invalid_request", err.Error(), false)
+		return
+	}
+	if profile != nil {
+		payload["metadata"] = map[string]any{"agent_profile": profile}
 	}
 	addRaw(payload, "agent", request.Agent)
 	addRaw(payload, "retrieval", request.Retrieval)
@@ -600,15 +621,57 @@ func (h *Handler) failMessage(c *gin.Context, workspaceID, messageID, code, mess
 }
 
 func (h *Handler) workspace(c *gin.Context) (string, bool) {
-	workspaceID := strings.TrimSpace(c.GetHeader("X-Workspace-Id"))
-	if workspaceID == "" {
-		workspaceID = h.cfg.DevWorkspaceID
-	}
-	if _, err := uuid.Parse(workspaceID); err != nil {
-		h.writeError(c, http.StatusBadRequest, "invalid_request", "X-Workspace-Id 不是合法 UUID", false)
+	identity, ok := auth.IdentityFromContext(c)
+	if !ok {
+		h.writeError(c, http.StatusUnauthorized, "unauthorized", "请先登录", false)
 		return "", false
 	}
-	return workspaceID, true
+	return identity.WorkspaceID, true
+}
+
+func (h *Handler) resolveAgentProfile(
+	ctx context.Context,
+	workspaceID, agentTypeID string,
+) (*agentProfile, error) {
+	if strings.TrimSpace(agentTypeID) == "" {
+		return nil, nil
+	}
+	settings, err := h.store.WorkspaceSettings(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("读取数字员工类型失败")
+	}
+	raw, err := json.Marshal(settings["agent_types"])
+	if err != nil {
+		return nil, fmt.Errorf("解析数字员工类型失败")
+	}
+	var types []struct {
+		ID           string   `json:"id"`
+		Name         string   `json:"name"`
+		Description  string   `json:"description"`
+		SystemPrompt string   `json:"system_prompt"`
+		Mode         string   `json:"mode"`
+		AllowedTools []string `json:"allowed_tools"`
+		Enabled      bool     `json:"enabled"`
+	}
+	if err := json.Unmarshal(raw, &types); err != nil {
+		return nil, fmt.Errorf("解析数字员工类型失败")
+	}
+	for _, item := range types {
+		if item.ID == agentTypeID {
+			if !item.Enabled {
+				return nil, fmt.Errorf("数字员工类型已停用")
+			}
+			if item.SystemPrompt == "" {
+				return nil, fmt.Errorf("数字员工类型缺少 System Prompt")
+			}
+			return &agentProfile{
+				ID: item.ID, Name: item.Name, Description: item.Description,
+				SystemPrompt: item.SystemPrompt, Mode: item.Mode,
+				AllowedTools: item.AllowedTools,
+			}, nil
+		}
+	}
+	return nil, fmt.Errorf("数字员工类型不存在")
 }
 
 func (h *Handler) writeError(c *gin.Context, status int, code, message string, retryable bool) {

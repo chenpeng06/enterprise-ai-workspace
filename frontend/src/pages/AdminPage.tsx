@@ -172,7 +172,11 @@ export function AdminPage() {
             最近 24 小时 · 每 15 秒刷新 · 数据来自 request_logs / rate_limit_events / retrieval_traces。
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link to="/admin/users" className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">用户权限</Link>
+          <Link to="/admin/agents" className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">数字员工</Link>
+          <Link to="/admin/documents" className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">文档摄取</Link>
+          <Link to="/admin/settings" className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">运营设置</Link>
           <button
             type="button"
             onClick={() => void metrics.refetch()}

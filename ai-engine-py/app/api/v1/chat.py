@@ -75,13 +75,20 @@ async def chat_stream(
 
     trace_uuid = parse_trace_id(x_trace_id) or uuid4()
     trace_id = str(trace_uuid)
+    agent_name: str | None = None
+    if body.mode == "agent":
+        profile = (body.metadata or {}).get("agent_profile")
+        if isinstance(profile, dict) and profile.get("name"):
+            agent_name = str(profile["name"])[:64]
+        else:
+            agent_name = body.resolved_agent().name
     meta = {
         "message_id": str(body.message_id),
         "conversation_id": str(body.conversation_id),
         "trace_id": trace_id,
         "workspace_id": str(body.workspace_id),
         "mode": body.mode,
-        "agent_name": body.resolved_agent().name if body.mode == "agent" else None,
+        "agent_name": agent_name,
         "model": settings.chat_model,
         "contract_version": "1.0.0",
         "server_time": datetime.now(UTC).isoformat(timespec="milliseconds"),

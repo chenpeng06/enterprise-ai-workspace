@@ -3,9 +3,9 @@
 面向企业研发运维场景的全栈 AI 项目：知识库问答、原文角标溯源、检索过程透视、
 数字员工多智能体工作流，以及网关限流/TTFT/Token 监控。
 
-> 当前进度：**Phase 1–3 已完成** —— 脚手架与契约、混合检索与 LangGraph 数字员工，
-> 以及 Go 网关限流/SSE 代理与 React 对话、角标联动、检索透视、监控看板。
-> 下一步 Phase 4：生产容器化与阿里云部署。
+> 当前进度：**Phase 1–4 功能已交付** —— 混合检索/数字员工、网关限流与监控、
+> 三角色权限与每日游客配额、数字员工类型、PDF 上传/切片/Embedding 摄取。
+> 容器化、CI/CD 与阿里云部署方案已记录，待执行。
 
 ## 架构一览
 
@@ -37,6 +37,8 @@ React 工作台 ──HTTPS/SSE──▶ gateway-go（Gin）
   的安全存放与配置方式。
 - [架构与接口契约](docs/ARCHITECTURE.md) —— 服务边界、REST/SSE 契约、
   完整 JSON Schema、pgvector 建表 SQL、多租户与可观测性设计。
+- [Phase 4 权限与交付方案](docs/PHASE4_ACCESS_AND_DELIVERY.md) —— 角色矩阵、游客配额、
+  数字员工类型、PDF 摄取、CI/CD 与阿里云部署记录。
 - [阶段路线图](docs/TASKS.md)
 - [项目协作规则](AGENTS.md)
 - 机器可读契约：[`docs/contracts/ai-engine-internal-v1.schema.json`](docs/contracts/ai-engine-internal-v1.schema.json)
@@ -221,11 +223,50 @@ cd ai-engine-py
 - 阿里云目标月度总成本 ≤ 1000 元，具体账单与选型见
   [`deploy/aliyun/README.md`](deploy/aliyun/README.md)。
 
+## Phase 4 权限、运营与摄取
+
+```powershell
+# 登录页
+# http://127.0.0.1:5173/login
+
+# 本地演示账号（仅 SEED_DEMO_USERS=true，生产必须关闭）
+# admin@demo.local / Admin@12345  超级管理员
+# ops@demo.local   / Ops@12345    受控管理员
+# guest@demo.local  / Guest@12345 游客（每日配额默认 20）
+```
+
+已交付：
+
+- 本地邮箱密码 + HttpOnly 会话，角色变更立即生效；
+- 超级管理员：用户/管理员任命、游客配额、数字员工类型、PDF 上传；
+- 受控管理员：管理 guest/editor、上传文档、维护数字员工类型；不能任命管理员或改配额；
+- 游客：只读对话/检索，Redis 每日配额，超限返回 429 + `guest_quota_exceeded`；
+- 数字员工类型：System Prompt/工具白名单经 `metadata.agent_profile` 注入引擎；
+- PDF：网关 multipart → 引擎 pypdf → 父子切片 → 百炼 Embedding → pgvector；
+- 管理 UI：用户权限、数字员工、文档摄取、运营设置；
+- 真实验收：游客第 3 次请求被拒；2 页中文 PDF 摄取 `ready` 并可检索；自定义 Agent 对话生效。
+
+CI/CD 与阿里云部署（Docker/ACR/ECS/SAE/RDS/Redis/OSS）的完整方案见
+[PHASE4_ACCESS_AND_DELIVERY.md](docs/PHASE4_ACCESS_AND_DELIVERY.md) 第 6 节，当前仅记录、不执行。
+
+| 登录与会话 | 游客配额 + 对话 |
+| --- | --- |
+| ![登录](docs/assets/phase4-login.png) | ![游客对话](docs/assets/phase4-guest-chat.png) |
+
+| 用户与角色 | 文档摄取 |
+| --- | --- |
+| ![用户权限](docs/assets/phase4-users.png) | ![文档摄取](docs/assets/phase4-documents.png) |
+
+| 数字员工类型 | 运营设置 |
+| --- | --- |
+| ![数字员工类型](docs/assets/phase4-agents.png) | ![运营设置](docs/assets/phase4-settings.png) |
+
 ## 阶段状态
 
 | 阶段 | 内容 | 状态 |
 | --- | --- | --- |
-| Phase 1 | 脚手架、JSON Schema 契约、pgvector 建表 | ✅ 已交付，本地 Docker 全链路已跑通 |
+| Phase 1 | 脚手架、JSON Schema 契约、pgvector 建表 | ✅ 已交付 |
 | Phase 2 | 混合检索 + RRF + Rerank、LangGraph 数字员工 | ✅ 已交付，真实 DeepSeek/百炼链路已验证 |
 | Phase 3 | Redis 令牌桶、SSE 代理、前端交互与管理看板 | ✅ 已交付，真实 SSE/限流/落库/看板已验证 |
-| Phase 4 | 容器化、阿里云部署与成本核算 | 待开始 |
+| Phase 4 | 角色权限、游客配额、数字员工类型、PDF 摄取 | ✅ 功能已交付；CI/CD/阿里云待执行 |
+| Phase 4 部署 | Docker 镜像、GitHub Actions、阿里云 ACR/RDS/Redis/OSS | 📝 方案已记录，待执行 |

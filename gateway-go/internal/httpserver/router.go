@@ -5,10 +5,15 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 
+	"github.com/enterprise-ai-workspace/gateway-go/internal/admin"
+	"github.com/enterprise-ai-workspace/gateway-go/internal/auth"
 	"github.com/enterprise-ai-workspace/gateway-go/internal/chatproxy"
 	"github.com/enterprise-ai-workspace/gateway-go/internal/config"
+	"github.com/enterprise-ai-workspace/gateway-go/internal/documents"
 	"github.com/enterprise-ai-workspace/gateway-go/internal/httpserver/middleware"
+	"github.com/enterprise-ai-workspace/gateway-go/internal/quota"
 	"github.com/enterprise-ai-workspace/gateway-go/internal/ratelimit"
 )
 
@@ -41,20 +46,81 @@ func NewRouter(cfg *config.Config, logger *slog.Logger, deps Dependencies) *gin.
 	}
 	chat := chatproxy.New(cfg, logger, deps.DB, deps.AIEngine)
 
+	var authRedisClient *redis.Client
+	if redisClient != nil {
+		authRedisClient = redisClient.Client
+	}
+	authService := auth.New(cfg, deps.DB, authRedisClient)
+	authHandler := auth.NewHandler(authService)
+	adminHandler := admin.NewHandler(cfg, deps.DB)
+	quotaService := quota.New(cfg, deps.DB, authRedisClient)
+	documentsHandler := documents.New(cfg, deps.DB, deps.AIEngine)
+
 	api := router.Group("/api/v1")
 	{
+		// 公开接口：登录与演示元信息。其余业务接口必须登录。
+		api.POST("/auth/login", authHandler.Login)
+		api.POST("/auth/logout", authHandler.Logout)
 		api.GET("/bootstrap", chat.Bootstrap)
-		api.GET("/chunks/:chunk_id", chat.Chunk)
-		api.GET("/admin/metrics", chat.Metrics)
-		if limiter != nil {
-			api.POST(
-				"/chat/stream",
-				ratelimit.Middleware(limiter, cfg, logger, deps.DB),
-				chat.Stream,
+
+		protected := api.Group("")
+		protected.Use(auth.RequireAuth(authService))
+		{
+			protected.GET("/auth/me", authHandler.Me)
+			protected.GET("/auth/quota", quotaService.StatusHandler)
+			protected.GET("/agent-types", adminHandler.PublicAgentTypes)
+			protected.GET(
+				"/chunks/:chunk_id",
+				auth.RequirePermission(auth.PermissionDocsRead),
+				chat.Chunk,
 			)
-		} else {
-			// 基础设施降级时仍允许对话，但生产 readiness 已会失败。
-			api.POST("/chat/stream", chat.Stream)
+			protected.GET(
+				"/admin/metrics",
+				auth.RequirePermission(auth.PermissionMetrics),
+				chat.Metrics,
+			)
+			protected.GET(
+				"/documents",
+				auth.RequirePermission(auth.PermissionDocsRead),
+				documentsHandler.List,
+			)
+			protected.POST(
+				"/documents",
+				auth.RequirePermission(auth.PermissionDocsWrite),
+				documentsHandler.Upload,
+			)
+
+			chatRoute := protected.Group("")
+			if limiter != nil {
+				chatRoute.Use(ratelimit.Middleware(limiter, cfg, logger, deps.DB))
+			}
+			chatRoute.Use(quota.Middleware(quotaService))
+			chatRoute.POST("/chat/stream", chat.Stream)
+
+			adminGroup := protected.Group("/admin")
+			adminGroup.Use(auth.RequirePermission(auth.PermissionUsersRead))
+			{
+				adminGroup.GET("/users", adminHandler.ListUsers)
+				adminGroup.GET("/settings", adminHandler.GetSettings)
+				adminGroup.GET("/agent-types", adminHandler.GetAgentTypes)
+				adminGroup.PUT(
+					"/agent-types",
+					auth.RequirePermission(auth.PermissionAgents),
+					adminHandler.PutAgentTypes,
+				)
+				adminGroup.PUT(
+					"/settings/guest-quota",
+					auth.RequirePermission(auth.PermissionQuota),
+					adminHandler.UpdateGuestQuota,
+				)
+
+				adminWrite := adminGroup.Group("")
+				adminWrite.Use(auth.RequirePermission(auth.PermissionUsersEdit))
+				adminWrite.POST("/users", adminHandler.CreateUser)
+				adminWrite.PATCH("/users/:user_id/role", adminHandler.UpdateRole)
+				adminWrite.DELETE("/users/:user_id", adminHandler.RemoveUser)
+				adminWrite.POST("/users/:user_id/reset-password", adminHandler.ResetPassword)
+			}
 		}
 	}
 

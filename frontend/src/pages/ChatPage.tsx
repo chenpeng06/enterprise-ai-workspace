@@ -5,14 +5,21 @@ import { Link } from "react-router-dom";
 import { ChatMessageBubble } from "@/features/chat/ChatMessageBubble";
 import { DocumentPreview } from "@/features/chat/DocumentPreview";
 import { useChatSession } from "@/features/chat/useChatSession";
+import { useAuth } from "@/features/auth/AuthContext";
 import { RetrievalInspector } from "@/features/retrieval-inspector/RetrievalInspector";
-import { fetchBootstrap, fetchGatewayHealth } from "@/lib/api";
+import {
+  fetchAgentTypes,
+  fetchBootstrap,
+  fetchGatewayHealth,
+  fetchQuota,
+} from "@/lib/api";
 import { cn } from "@/lib/cn";
 import type { Citation } from "@/types/contract";
 
 type RightTab = "preview" | "inspector";
 
 export function ChatPage() {
+  const { identity, can } = useAuth();
   const bootstrap = useQuery({
     queryKey: ["bootstrap"],
     queryFn: ({ signal }) => fetchBootstrap(signal),
@@ -22,16 +29,41 @@ export function ChatPage() {
     queryFn: ({ signal }) => fetchGatewayHealth(signal),
     refetchInterval: 30_000,
   });
+  const agentTypes = useQuery({
+    queryKey: ["agent-types"],
+    queryFn: ({ signal }) => fetchAgentTypes(signal),
+  });
+  const quota = useQuery({
+    queryKey: ["guest-quota"],
+    queryFn: ({ signal }) => fetchQuota(signal),
+    refetchInterval: 30_000,
+    enabled: identity?.role === "viewer",
+  });
 
   const [mode, setMode] = useState<"rag" | "agent">("agent");
+  const [agentTypeId, setAgentTypeId] = useState("");
   const [rightTab, setRightTab] = useState<RightTab>("preview");
   const [input, setInput] = useState("");
   const kbIds = useMemo(
     () => (bootstrap.data ? [bootstrap.data.kb_id] : []),
     [bootstrap.data],
   );
-  const session = useChatSession({ kbIds, mode });
+  const session = useChatSession({ kbIds, mode, agentTypeId: agentTypeId || undefined });
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!agentTypeId && agentTypes.data && agentTypes.data.length > 0) {
+      setAgentTypeId(agentTypes.data[0].id);
+    }
+  }, [agentTypeId, agentTypes.data]);
+
+  const selectedAgent = agentTypes.data?.find((item) => item.id === agentTypeId);
+
+  useEffect(() => {
+    if (selectedAgent) {
+      setMode(selectedAgent.mode);
+    }
+  }, [selectedAgent]);
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -82,6 +114,20 @@ export function ChatPage() {
             <span className="h-1.5 w-1.5 rounded-full bg-current" />
             gateway {health.data?.status ?? "checking"}
           </span>
+          {agentTypes.data && agentTypes.data.length > 0 ? (
+            <select
+              value={agentTypeId}
+              onChange={(event) => setAgentTypeId(event.target.value)}
+              className="max-w-[190px] rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-brand-400"
+              title="选择数字员工类型"
+            >
+              {agentTypes.data.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <div className="flex rounded-lg border border-slate-200 bg-white p-0.5">
             {(["agent", "rag"] as const).map((value) => (
               <button
@@ -99,6 +145,19 @@ export function ChatPage() {
               </button>
             ))}
           </div>
+          {identity?.role === "viewer" && quota.data?.applicable ? (
+            <span
+              className={cn(
+                "rounded-full border px-2.5 py-1 text-xs",
+                quota.data.remaining > 0
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : "border-rose-200 bg-rose-50 text-rose-700",
+              )}
+              title={`每日 ${quota.data.limit} 次，明日 00:05 重置`}
+            >
+              今日配额 {quota.data.remaining}/{quota.data.limit}
+            </span>
+          ) : null}
           <button
             type="button"
             onClick={session.reset}
@@ -106,12 +165,14 @@ export function ChatPage() {
           >
             新会话
           </button>
-          <Link
-            to="/admin"
-            className="rounded-lg bg-brand-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-600"
-          >
-            监控看板
-          </Link>
+          {can("metrics.read") ? (
+            <Link
+              to="/admin"
+              className="rounded-lg bg-brand-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-600"
+            >
+              管理后台
+            </Link>
+          ) : null}
         </div>
       </header>
 

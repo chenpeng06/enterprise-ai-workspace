@@ -3,7 +3,7 @@
 文档解析、切片、Embedding、混合检索、Rerank 与数字员工多智能体编排。
 **不承担**鉴权、限流、计费与业务 CRUD —— 这些属于 `gateway-go`。
 
-## Phase 1/2 交付范围
+## Phase 1/2/4 交付范围
 
 - 可启动的 FastAPI 工程骨架（lifespan、异常处理、内部鉴权）；
 - 配置与密钥管理（pydantic-settings，LLM / Embedding / Rerank 分离凭证）；
@@ -46,11 +46,13 @@ ai-engine-py/
 │   │   └── rewrite.py             # Query 改写
 │   ├── agents/ops_assistant.py    # LangGraph 数字员工 + SSE 事件
 │   ├── tools/                     # 工具接口预留（当前模拟日志/状态）
-│   └── services/llm.py            # DeepSeek / 百炼 OpenAI 兼容客户端
+│   └── services/
+│       ├── llm.py                 # DeepSeek / 百炼 OpenAI 兼容客户端
+│       └── ingest.py              # PDF 解析、父子切片、Embedding 写入
 ├── scripts/
 │   ├── check_models.py            # 不打印 Key 的供应商连通性测试
 │   └── seed_demo.py               # 写入演示知识库
-└── tests/                         # 契约、检索、Agent、API 测试
+└── tests/                         # 契约、检索、Agent、摄取、API 测试
 ```
 
 ## 本地运行
@@ -136,6 +138,11 @@ DeepSeek 官方 API 当前不提供 Embedding/Rerank，不能只用一个 DeepSe
 3. API：
    - `POST /internal/v1/retrieval/search`（非流式透视）；
    - `POST /internal/v1/chat/stream`（SSE，15s 心跳，严格终态）。
+4. Phase 4 摄取与角色上下文：
+   - `POST /internal/v1/ingest/tasks`：pypdf 提取 → 父子切片 → 百炼
+     Embedding → pgvector，后台更新 `documents/ingest_tasks`；
+   - `GET /internal/v1/ingest/tasks/{task_id}`：任务 stage/progress/counters；
+   - `metadata.agent_profile`：网关校验后的数字员工类型 system prompt 与工具白名单。
 
 ## Phase 2 本地验收
 

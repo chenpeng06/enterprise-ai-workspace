@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     db_pool_size: int = Field(default=10, ge=1, le=50)
     db_max_overflow: int = Field(default=10, ge=0, le=50)
     db_echo: bool = False
+    ingest_local_root: str = "../.local/uploads"
 
     # 大模型与检索模型（Phase 2 使用）
     # 对话/Agent/改写可使用 DeepSeek、DashScope 或任意 OpenAI 兼容端点；

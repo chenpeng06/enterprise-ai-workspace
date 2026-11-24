@@ -48,6 +48,21 @@ type Config struct {
 	// Redis 分布式令牌桶
 	RateLimitCapacity        int
 	RateLimitRefillPerSecond float64
+
+	// 本地认证与演示账号
+	SessionTTL          time.Duration
+	SessionCookieSecure bool
+	SeedDemoUsers       bool
+	DemoSuperEmail      string
+	DemoSuperPassword   string
+	DemoAdminEmail      string
+	DemoAdminPassword   string
+	DemoGuestEmail      string
+	DemoGuestPassword   string
+	GuestQuotaDefault   int
+
+	UploadDir      string
+	MaxUploadBytes int64
 }
 
 // Load 读取并校验配置。任何非法值都会在启动阶段直接失败（fail fast）。
@@ -105,6 +120,26 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	sessionTTL, err := durationEnv("SESSION_TTL", 12*time.Hour)
+	if err != nil {
+		return nil, err
+	}
+	guestQuota, err := intEnv("GUEST_QUOTA_DEFAULT", 20, 0, 10000)
+	if err != nil {
+		return nil, err
+	}
+	maxUploadMB, err := intEnv("UPLOAD_MAX_MB", 50, 1, 100)
+	if err != nil {
+		return nil, err
+	}
+	seedDemoUsers, err := boolEnv("SEED_DEMO_USERS", strings.TrimSpace(getEnv("APP_ENV", "development")) == "development")
+	if err != nil {
+		return nil, err
+	}
+	cookieSecure, err := boolEnv("SESSION_COOKIE_SECURE", false)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &Config{
 		Env:                      strings.TrimSpace(getEnv("APP_ENV", "development")),
@@ -128,6 +163,18 @@ func Load() (*Config, error) {
 		DevKBID:                  strings.TrimSpace(getEnv("DEV_KB_ID", defaultKBID)),
 		RateLimitCapacity:        rateLimitCapacity,
 		RateLimitRefillPerSecond: rateLimitRefill,
+		SessionTTL:               sessionTTL,
+		SessionCookieSecure:      cookieSecure,
+		SeedDemoUsers:            seedDemoUsers,
+		DemoSuperEmail:           strings.TrimSpace(getEnv("DEMO_SUPER_ADMIN_EMAIL", "admin@demo.local")),
+		DemoSuperPassword:        getEnv("DEMO_SUPER_ADMIN_PASSWORD", "Admin@12345"),
+		DemoAdminEmail:           strings.TrimSpace(getEnv("DEMO_ADMIN_EMAIL", "ops@demo.local")),
+		DemoAdminPassword:        getEnv("DEMO_ADMIN_PASSWORD", "Ops@12345"),
+		DemoGuestEmail:           strings.TrimSpace(getEnv("DEMO_GUEST_EMAIL", "guest@demo.local")),
+		DemoGuestPassword:        getEnv("DEMO_GUEST_PASSWORD", "Guest@12345"),
+		GuestQuotaDefault:        guestQuota,
+		UploadDir:                strings.TrimSpace(getEnv("UPLOAD_DIR", "../.local/uploads")),
+		MaxUploadBytes:           int64(maxUploadMB) * 1024 * 1024,
 	}
 
 	switch cfg.Env {
@@ -161,6 +208,18 @@ func Load() (*Config, error) {
 	}
 	if cfg.DevWorkspaceID == "" || cfg.DevKBID == "" {
 		return nil, fmt.Errorf("DEV_WORKSPACE_ID / DEV_KB_ID 不能为空")
+	}
+	if cfg.SessionTTL <= 0 {
+		return nil, fmt.Errorf("SESSION_TTL 必须大于 0")
+	}
+	if cfg.UploadDir == "" {
+		return nil, fmt.Errorf("UPLOAD_DIR 不能为空")
+	}
+	if cfg.Env == "production" && cfg.SeedDemoUsers {
+		return nil, fmt.Errorf("生产环境禁止 SEED_DEMO_USERS=true")
+	}
+	if cfg.Env == "production" && !cfg.SessionCookieSecure {
+		return nil, fmt.Errorf("生产环境必须启用 SESSION_COOKIE_SECURE=true")
 	}
 
 	return cfg, nil
@@ -211,6 +270,18 @@ func floatEnv(key string, fallback, minValue, maxValue float64) (float64, error)
 	}
 	if value < minValue || value > maxValue {
 		return 0, fmt.Errorf("环境变量 %s 必须在 [%g, %g] 范围内，当前为 %g", key, minValue, maxValue, value)
+	}
+	return value, nil
+}
+
+func boolEnv(key string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("环境变量 %s 必须是 true/false: %w", key, err)
 	}
 	return value, nil
 }
